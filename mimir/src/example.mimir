@@ -1,0 +1,10 @@
+
+#[mimir_global]
+fn vec_add(
+    input_a: &[f32],
+    input_b: &[f32],
+    output: &mut [f32]
+) {
+    let idx = global_invocation_id().x as usize;
+    output[idx] = input_a[idx] + input_b[idx];
+}
