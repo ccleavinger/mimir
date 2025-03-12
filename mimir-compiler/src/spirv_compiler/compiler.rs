@@ -6,8 +6,6 @@ use syn::Block;
 
 use super::ir::{MimirBuiltIn, MimirExprIR, MimirLit, MimirPtrType, MimirType, MimirVariable};
 
-
-
 pub struct SpirVCompiler {
     pub spirv_builder: Builder,
     pub vars: HashMap<String, MimirVariable>,
@@ -15,11 +13,11 @@ pub struct SpirVCompiler {
     pub types: HashMap<MimirType, Word>,
     pub builtins: HashSet<MimirBuiltIn>,
     pub literals: HashMap<MimirLit, Word>,
+    pub param_order: Vec<String>,
     pub ir: Vec<MimirExprIR>,
 }
 
 impl SpirVCompiler {
-
     pub fn new() -> Self {
         SpirVCompiler {
             spirv_builder: Builder::new(),
@@ -28,16 +26,20 @@ impl SpirVCompiler {
             types: HashMap::new(),
             builtins: HashSet::new(),
             literals: HashMap::new(),
+            param_order: Vec::new(),
             ir: Vec::new(),
         }
     }
 
-    pub fn compile_kernel(&mut self, body: &Block, parameters: &[Parameter]) -> Result<Vec<u32>, String> {
-
+    pub fn compile_kernel(
+        &mut self,
+        body: &Block,
+        parameters: &[Parameter],
+    ) -> Result<Vec<u32>, String> {
         self.params_to_ir(parameters);
         self.body_to_ir(body)?;
-        
-        
+
+        self.ir_to_spirv()?;
 
         let module = std::mem::replace(&mut self.spirv_builder, Builder::new()).module();
 
@@ -50,4 +52,3 @@ impl Default for SpirVCompiler {
         Self::new()
     }
 }
-

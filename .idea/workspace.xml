@@ -1,0 +1,119 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="AutoImportSettings">
+    <option name="autoReloadType" value="ALL" />
+  </component>
+  <component name="CargoProjects">
+    <cargoProject FILE="$PROJECT_DIR$/example/Cargo.toml" />
+    <cargoProject FILE="$PROJECT_DIR$/mimir/Cargo.toml" />
+    <cargoProject FILE="$PROJECT_DIR$/mimir-ast/Cargo.toml" />
+    <cargoProject FILE="$PROJECT_DIR$/mimir-compiler/Cargo.toml" />
+  </component>
+  <component name="ChangeListManager">
+    <list default="true" id="5fba7ef9-e36c-4bd0-bf8b-9585774c373e" name="Changes" comment="Refactor SPIR-V builder and add `for_loop` and `param` handlers&#10;&#10;Refactored SPIR-V code generation by restructuring IR build logic into specialized modules. Added dedicated handling for `for` loops (`for_loop.rs`) and parameter orders (`param.rs`). Improved error handling, streamlined pointer and type generation, and enhanced modularity of SPIR-V builder operations.">
+      <changelist_data name="ccleavinger" email="96743974+ccleavinger@users.noreply.github.com" automatic="false" />
+      <change afterPath="$PROJECT_DIR$/.idea/rust.xml" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/mimir-compiler/src/spirv_compiler/build_ir/for_loop.rs" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/mimir-compiler/src/spirv_compiler/build_ir/mod.rs" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/mimir-compiler/src/spirv_compiler/build_ir/param.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/.gitignore" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/dictionaries/project.xml" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/vcs.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/vcs.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/mimir-compiler/src/spirv_compiler/binop.rs" beforeDir="false" afterPath="$PROJECT_DIR$/mimir-compiler/src/spirv_compiler/build_ir/binop.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/mimir-compiler/src/spirv_compiler/compiler.rs" beforeDir="false" afterPath="$PROJECT_DIR$/mimir-compiler/src/spirv_compiler/compiler.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/mimir-compiler/src/spirv_compiler/ir_to_spirv.rs" beforeDir="false" afterPath="$PROJECT_DIR$/mimir-compiler/src/spirv_compiler/ir_to_spirv.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/mimir-compiler/src/spirv_compiler/mod.rs" beforeDir="false" afterPath="$PROJECT_DIR$/mimir-compiler/src/spirv_compiler/mod.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/mimir-compiler/src/spirv_compiler/to_ir.rs" beforeDir="false" afterPath="$PROJECT_DIR$/mimir-compiler/src/spirv_compiler/to_ir.rs" afterDir="false" />
+    </list>
+    <option name="SHOW_DIALOG" value="false" />
+    <option name="HIGHLIGHT_CONFLICTS" value="true" />
+    <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
+    <option name="LAST_RESOLUTION" value="IGNORE" />
+  </component>
+  <component name="FileTemplateManagerImpl">
+    <option name="RECENT_TEMPLATES">
+      <list>
+        <option value="Rust File" />
+      </list>
+    </option>
+  </component>
+  <component name="Git.Settings">
+    <option name="PREVIOUS_COMMIT_AUTHORS">
+      <list>
+        <option value="ccleavinger &lt;96743974+ccleavinger@users.noreply.github.com&gt;" />
+      </list>
+    </option>
+    <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$" />
+  </component>
+  <component name="GitHubPullRequestSearchHistory"><![CDATA[{
+  "lastFilter": {
+    "state": "OPEN",
+    "assignee": "ccleavinger"
+  }
+}]]></component>
+  <component name="GithubPullRequestsUISettings"><![CDATA[{
+  "selectedUrlAndAccountId": {
+    "url": "https://github.com/ccleavinger/mimir.git",
+    "accountId": "6530c1ef-84a1-4a49-94fe-4d44b51f4256"
+  }
+}]]></component>
+  <component name="MacroExpansionManager">
+    <option name="directoryName" value="yJblsFPd" />
+  </component>
+  <component name="ProjectColorInfo"><![CDATA[{
+  "customColor": "",
+  "associatedIndex": 4
+}]]></component>
+  <component name="ProjectId" id="2u9GqDDvtEtPWWxnbUYA7KQFhKi" />
+  <component name="ProjectViewState">
+    <option name="hideEmptyMiddlePackages" value="true" />
+    <option name="showLibraryContents" value="true" />
+  </component>
+  <component name="PropertiesComponent"><![CDATA[{
+  "keyToString": {
+    "RunOnceActivity.ShowReadmeOnStart": "true",
+    "RunOnceActivity.git.unshallow": "true",
+    "RunOnceActivity.rust.reset.selective.auto.import": "true",
+    "git-widget-placeholder": "master",
+    "ignore.virus.scanning.warn.message": "true",
+    "last_opened_file_path": "C:/mimir",
+    "node.js.detected.package.eslint": "true",
+    "node.js.detected.package.tslint": "true",
+    "node.js.selected.package.eslint": "(autodetect)",
+    "node.js.selected.package.tslint": "(autodetect)",
+    "nodejs_package_manager_path": "npm",
+    "org.rust.cargo.project.model.PROJECT_DISCOVERY": "true",
+    "org.rust.first.attach.projects": "true",
+    "vue.rearranger.settings.migration": "true"
+  }
+}]]></component>
+  <component name="RecentsManager">
+    <key name="MoveFile.RECENT_KEYS">
+      <recent name="C:\mimir\mimir-compiler\src\spirv_compiler\build_ir" />
+    </key>
+  </component>
+  <component name="RustProjectSettings">
+    <option name="toolchainHomeDirectory" value="$USER_HOME$/.cargo/bin" />
+  </component>
+  <component name="SpellCheckerSettings" RuntimeDictionaries="0" Folders="0" CustomDictionaries="0" DefaultDictionary="application-level" UseSingleDictionary="true" transferred="true" />
+  <component name="TaskManager">
+    <task active="true" id="Default" summary="Default task">
+      <changelist id="5fba7ef9-e36c-4bd0-bf8b-9585774c373e" name="Changes" comment="" />
+      <created>1741653565901</created>
+      <option name="number" value="Default" />
+      <option name="presentableId" value="Default" />
+      <updated>1741653565901</updated>
+      <workItem from="1741653567838" duration="21104000" />
+    </task>
+    <servers />
+  </component>
+  <component name="TypeScriptGeneratedFilesManager">
+    <option name="version" value="3" />
+  </component>
+  <component name="VcsManagerConfiguration">
+    <option name="CHECK_CODE_CLEANUP_BEFORE_PROJECT_COMMIT_PROFILE" value="Project Default" />
+    <MESSAGE value="Refactor SPIR-V builder and add `for_loop` and `param` handlers&#10;&#10;Refactored SPIR-V code generation by restructuring IR build logic into specialized modules. Added dedicated handling for `for` loops (`for_loop.rs`) and parameter orders (`param.rs`). Improved error handling, streamlined pointer and type generation, and enhanced modularity of SPIR-V builder operations." />
+    <option name="LAST_COMMIT_MESSAGE" value="Refactor SPIR-V builder and add `for_loop` and `param` handlers&#10;&#10;Refactored SPIR-V code generation by restructuring IR build logic into specialized modules. Added dedicated handling for `for` loops (`for_loop.rs`) and parameter orders (`param.rs`). Improved error handling, streamlined pointer and type generation, and enhanced modularity of SPIR-V builder operations." />
+    <option name="OPTIMIZE_IMPORTS_BEFORE_PROJECT_COMMIT" value="true" />
+  </component>
+</project>

@@ -1,9 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <project version="4">
   <component name="VcsDirectoryMappings">
-    <mapping directory="$PROJECT_DIR$/example" vcs="Git" />
-    <mapping directory="$PROJECT_DIR$/mimir" vcs="Git" />
-    <mapping directory="$PROJECT_DIR$/mimir-ast" vcs="Git" />
-    <mapping directory="$PROJECT_DIR$/mimir-compiler" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$" vcs="Git" />
   </component>
 </project>

@@ -1,6 +1,6 @@
 use rspirv::spirv::Word;
 
-use super::{compiler::SpirVCompiler, ir::{self, MimirExprIR, MimirType}, util::type_importance};
+use crate::spirv_compiler::{compiler::SpirVCompiler, ir::{self, MimirExprIR, MimirType}, util::type_importance};
 
 impl SpirVCompiler {
     pub fn build_binop(&mut self, lhs: MimirExprIR, op: &ir::MimirBinOp, rhs: MimirExprIR) -> Result<(MimirType, Word), String> {
@@ -14,7 +14,18 @@ impl SpirVCompiler {
         match expr {
             MimirExprIR::Var(name) => {
                 let var = self.vars.get(name).unwrap();
-                Ok((var.ty.base.clone(), var.word.unwrap()))
+
+                let ty = *self.types.get(&var.ty.base).ok_or(format!("Type not found for variable: {:?}\nWith the type: {:?}", name, var.ty.base))?;
+
+                let word = self.spirv_builder.load(
+                    ty,
+                    None,
+                    var.word.unwrap(),
+                    None,
+                    vec![]
+                ).map_err(|e| e.to_string())?;
+
+                Ok((var.ty.base.clone(), word))
             },
             MimirExprIR::Literal(lit) => {
                 match lit {
