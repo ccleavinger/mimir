@@ -1,0 +1,13 @@
+[package]
+name = "matmul"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+description.workspace = true
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+mimir-gpu = { path = "../../crates/mimir-gpu" }
+mimir-vulkan = { path = "../../crates/mimir-vulkan" }
+rand = "0.9.1"

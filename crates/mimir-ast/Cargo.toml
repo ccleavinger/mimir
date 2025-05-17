@@ -1,0 +1,20 @@
+[package]
+name = "mimir-ast"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+rspirv = "0.7.0"
+syn = { version = "2.0.101", features = ["full"] }
+serde = {version = "1.0.219", features = ["derive"]}
+serde_json = "1.0.140"
+quote = "1.0.40"
+bincode = { version = "2.0.1", features = ["serde"] }
+cfg-if = "1.0.0"
+
+[features]
+default = ["bin"]
+
+bin = []
+
+json = []

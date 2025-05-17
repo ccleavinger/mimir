@@ -1,0 +1,28 @@
+[package]
+name = "mimir-gpu"
+version = "0.1.0"
+edition = "2021"
+authors = ["Caleb Cleavinger caleb.cleavinger@gmail.com"]
+description = "Core Macros for the Mimir GPU programming framework"
+license = "MIT or Apache-2.0"
+
+[lib]
+proc-macro = true
+
+[dependencies]
+syn = { version = "2.0.90", features = ["full"] }
+quote = "1.0"
+mimir-ast = { path = "../mimir-ast" }
+mimir-runtime = { path = "../mimir-runtime" }
+cfg-if = "1.0.0"
+proc-macro-error2 = "2.0.1"
+proc-macro2 = "1.0.95"
+regex = "1.11.1"
+
+[features]
+
+default = ["bin"]
+
+bin = []
+
+json = []

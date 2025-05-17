@@ -1,1 +1,0 @@
-[{"name":"assign_mult_by_2","parameters":[{"name":"input","type_name":"& [f32]","is_mutable":false},{"name":"output","type_name":"& mut [f32]","is_mutable":false}],"body":"let idx = block_idx * block_dim + thread_idx ; output [idx] = input [idx] * 2.0 ;"}]

@@ -1,0 +1,8 @@
+[package]
+name = "mimir-runtime"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+mimir-ast = { path = "../mimir-ast" }
+serde = "1.0.219"
