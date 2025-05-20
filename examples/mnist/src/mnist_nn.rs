@@ -1,4 +1,4 @@
-use mimir::{launch, mimir_global};
+use mimir_gpu::{launch, mimir_global};
 use mimir_vulkan::*;
 use mnist::MnistBuilder;
 use rand::distr::{Distribution, Uniform};
