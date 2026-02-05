@@ -75,9 +75,12 @@ So far this has been my passion project and solo developed by me. I'm always add
 ## Roadmap
 ---
 
-- Binary intermediary format; smaller file sizes, more efficient JIT compilation, and langauge agnostic
-- Add shared memory features
-- Stricter typing
-- Kernel Templating???
-- CUDA backend
-- Tenstorrent/RISC-V accelerator backend???
+- [x] Binary intermediary format; smaller file sizes, more efficient JIT compilation, and langauge agnostic
+- [x] Add shared memory features
+- [ ] Stricter typing
+    - specification checks do exist but are not good enough yet 
+- [ ] Kernel Templating
+    - [x] Constant generics
+    - [ ] Type Generics  
+- [ ] CUDA backend
+- [ ] Tenstorrent/RISC-V accelerator backend???
