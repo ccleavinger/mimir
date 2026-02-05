@@ -1,0 +1,32 @@
+## THIS IS ONLY SUPPOSED TO BE USED IN CONTJUCTION WITH THE `mimir-omni-runtime` CRATE
+[package]
+name = "mimir-macros"
+version = "0.1.0"
+edition = "2021"
+authors = ["Caleb Cleavinger caleb.cleavinger@gmail.com"]
+description = "Core Macros for the Mimir GPU programming framework"
+license = "MIT or Apache-2.0"
+repository = "https://github.com/ccleavinger/mimir/tree/master/crates/mimir-gpu"
+
+[lib]
+proc-macro = true
+
+[dependencies]
+syn = { version = "2.0.90", features = ["full"] }
+quote = "1.0"
+mimir-ir = { path = "../mimir-ir" }
+mimir-runtime = { path = "../mimir-runtime" }
+mimir-rs-compiler = { path = "../mimir-rs-compiler" }
+cfg-if = "1.0.0"
+proc-macro-error2 = "2.0.1"
+proc-macro2 = "1.0.101"
+small_uid = "0.2.4"
+regex = "1.12"
+
+[features]
+
+default = ["bin"]
+
+bin = []
+
+json = []

@@ -8,6 +8,6 @@ description.workspace = true
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-mimir-gpu = { path = "../../crates/mimir-gpu" }
-mimir-vulkan = { path = "../../crates/mimir-vulkan" }
+mimir-macros = { path = "../../crates/mimir-macros" }
+mimir-omni-runtime = { path = "../../crates/mimir-omni-runtime" }
 rand = "0.9.1"

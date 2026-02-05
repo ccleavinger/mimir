@@ -1,0 +1,15 @@
+[package]
+name = "mimir-rs-compiler"
+version = "0.1.0"
+edition = "2024"
+authors = ["Caleb Cleavinger caleb.cleavinger@gmail.com"]
+description = "Rust to Mimir IR compiler for the Mimir GPU programming framework"
+license = "MIT or Apache-2.0"
+repository = "https://github.com/ccleavinger/mimir/tree/master/crates/mimir-rs-compiler"
+
+[dependencies]
+syn = { version = "2.0.90", features = ["full"] }
+quote = "1.0"
+mimir-ir = { path = "../mimir-ir" }
+mimir-runtime = { path = "../mimir-runtime" }
+small_uid = "0.2.4"

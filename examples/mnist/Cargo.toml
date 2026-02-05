@@ -4,8 +4,8 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-mimir-gpu = { path = "../../crates/mimir-gpu" }
-mimir-vulkan = { path = "../../crates/mimir-vulkan" }
+mimir-macros = { path = "../../crates/mimir-macros" }
+mimir-omni-runtime = { path = "../../crates/mimir-omni-runtime" }
 anyhow = "1.0.98"
 rand = "0.9.1"
 mnist = "0.6.0"

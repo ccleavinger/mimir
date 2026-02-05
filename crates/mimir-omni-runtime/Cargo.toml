@@ -1,0 +1,17 @@
+[package]
+name = "mimir-omni-runtime"
+version = "0.1.0"
+edition = "2024"
+authors = ["Caleb Cleavinger caleb.cleavinger@gmail.com"]
+description = "United multi-platform backend for the Mimir GPU programming framework"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/ccleavinger/mimir/tree/master/crates/mimir-omni-runtime"
+
+[dependencies]
+mimir-runtime = { path = "../mimir-runtime" }
+mimir-vulkan = { path = "../mimir-vulkan" }
+mimir-ir = { path = "../mimir-ir" }
+serde = "1.0"
+thiserror = "2.0"
+postcard = {version = "1.1.3", features = ["alloc"] }
+parking_lot = "0.12.5"

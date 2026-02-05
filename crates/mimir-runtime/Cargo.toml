@@ -8,5 +8,6 @@ license = "MIT or Apache-2.0"
 repository = "https://github.com/ccleavinger/mimir/tree/master/crates/mimir-runtime"
 
 [dependencies]
-mimir-ast = { path = "../mimir-ast" }
-serde = "1.0.219"
+mimir-ir = { path = "../mimir-ir" }
+serde = "1.0.226"
+thiserror = "2.0.16"

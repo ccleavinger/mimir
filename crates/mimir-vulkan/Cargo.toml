@@ -4,12 +4,12 @@ version = "0.1.0"
 edition = "2024"
 authors = ["Caleb Cleavinger caleb.cleavinger@gmail.com"]
 description = "Vulkan backend for the Mimir GPU programming framework"
-license = "MIT or Apache-2.0"
+license = "MIT OR Apache-2.0"
 repository = "https://github.com/ccleavinger/mimir/tree/master/crates/mimir-vulkan"
 
 [dependencies]
-spirv-compiler = { path = "../spirv-compiler"}
-mimir-ast = { path = "../mimir-ast" }
+mimir-vulkan-spirv-compiler = { path = "../mimir-vulkan-spirv-compiler" }
+mimir-ir = { path = "../mimir-ir" }
 mimir-runtime = { path = "../mimir-runtime" }
 ash = "0.38.0"
 vk-mem = "0.4"
@@ -17,4 +17,5 @@ futures = "0.3.31"
 serde = "1.0.219"
 libc = "0.2"
 log = "0.4"
-thiserror = "2.0.12"
+thiserror = "2.0.17"
+parking_lot = "0.12.5"

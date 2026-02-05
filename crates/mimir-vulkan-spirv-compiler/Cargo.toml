@@ -1,0 +1,13 @@
+[package]
+name = "mimir-vulkan-spirv-compiler"
+version = "0.1.0"
+edition = "2021"
+authors = ["Caleb Cleavinger caleb.cleavinger@gmail.com"]
+description = "SPIR-V compiler, essential part of the Vulkan backend for the Mimir GPU programming framework"
+license = "MIT or Apache-2.0"
+repository = "https://github.com/ccleavinger/mimir/tree/master/crates/spirv-compiler"
+
+[dependencies]
+mimir-ir = { path = "../mimir-ir" }
+mimir-runtime = { path = "../mimir-runtime" }
+rspirv = "0.12.0"

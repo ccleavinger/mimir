@@ -1,53 +1,73 @@
-use mimir_ast::MimirGlobalAST;
-use std::error::Error; // Import the Error trait
+use mimir_ir::ir::MimirIRData;
+use std::sync::Arc;
+use thiserror::Error;
+
+use crate::{generic::runtime::MimirJITExecutionError, platforms::MimirPlatform};
 
 use super::array::MimirArray;
 
-pub trait MimirLaunch<E: Error> { // Add generic error type E constrained by std::error::Error
-    fn launch_ast(
-        ast: &MimirGlobalAST,
+pub trait MimirLaunch {
+    fn launch_kernel(
+        &self,
+        ir: &MimirIRData,
+        name: String, // name of the kernel
         block_dim: &[u32; 3],
         grid_dim: &[u32; 3],
         params: &[Param],
-    ) -> Result<(), E>; // Use E as the error type
+        cgs: &[u32], // currently const generics are only unsized 32 bit integers
+    ) -> Result<(), MimirLaunchError>;
 
-    // may not be implemented in all backends, i.e different language is used for kernel
-    fn launch_kernel_name(
-        kernel_name: &str,
-        grid_dim: &[u32; 3],
-        block_dim: &[u32; 3],
-        params: &[Param],
-    ) -> Result<(), E>; // Use E as the error type
+    fn set_device(&self, idx: usize) -> Result<(), LaunchDeviceError>;
+}
+
+#[derive(Error, Debug)]
+pub enum MimirLaunchError {
+    #[error("Launch device error: {0}")]
+    LaunchDevError(#[from] LaunchDeviceError),
+
+    #[error("Mimir JIT execution error: {0}")]
+    JitExecutionError(#[from] MimirJITExecutionError),
+
+    #[error("`{0:?}` is an unsupported platform and runtime")]
+    UnsupportedPlatform(MimirPlatform),
 }
 
 pub enum Param<'a> {
-    PushConst(MimirPushConst),
+    Var(MimirVar),
     Buffer(MimirBuffer<'a>),
 }
 
-pub enum MimirPushConst {
+pub enum MimirVar {
     Int32(i32),
     Int64(i64),
     Float32(f32),
     Bool(bool),
 }
 
-impl Clone for MimirPushConst {
+impl Clone for MimirVar {
     fn clone(&self) -> Self {
         match self {
-            MimirPushConst::Int32(val) => MimirPushConst::Int32(*val),
-            MimirPushConst::Int64(val) => MimirPushConst::Int64(*val),
-            MimirPushConst::Float32(val) => MimirPushConst::Float32(*val),
-            MimirPushConst::Bool(val) => MimirPushConst::Bool(*val),
+            Self::Int32(val) => Self::Int32(*val),
+            Self::Int64(val) => Self::Int64(*val),
+            Self::Float32(val) => Self::Float32(*val),
+            Self::Bool(val) => Self::Bool(*val),
         }
     }
 }
 
-pub type BufferType<'a, T> = Box<&'a (dyn MimirArray<T> + Send + Sync)>;
+pub type BufferType<'a, T> = &'a Arc<dyn MimirArray<T> + Send + Sync>;
 
 pub enum MimirBuffer<'a> {
     Int32(BufferType<'a, i32>),
     Int64(BufferType<'a, i64>),
     Float32(BufferType<'a, f32>),
     Bool(BufferType<'a, bool>),
+}
+
+#[derive(Error, Debug)]
+pub enum LaunchDeviceError {
+    #[error(
+        "Device at index `{0}` is out of range, only `{1}` Mimir supported devices are availible"
+    )]
+    OutOfRange(usize, usize),
 }
