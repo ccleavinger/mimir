@@ -1,17 +1,16 @@
 # Mimir
 
-High-performance Kernel programming language extension for Rust
+GPU Kernel programming language extension for Rust
 
 ## Overview
----
 Mimir is the Norse god of wisdom who happens to be a floating head in a well. GPU programming is a lot like Mimir I've found. Nearly boundless knowledge and potential but as difficult to interact with as a disembodied head that is barely afloat.
 
-Mimir the library aims to address this by enabling the simplicity of CUDA kernel programming with the widespread adoption of the Vulkan standards.
+Mimir the library aims to address this by enabling the simplicity of CUDA kernel programming with an 'omni' backend that will support various API vendors out of the box. Currently Vulkan is the only implemented API backend, more are soon to come.
 
+## WARNING!! 🚧🚧🚧
 This project is still in early development, expect breaking changes and/or unexpected behavior. 
 
 ## Example
----
 Below is an example taken directly from the naive Matmul example
 ```rust
 // Naive matrix multiplication kernel
@@ -68,11 +67,9 @@ If you wish to use Mimir in a project include `mimi-omni-runtime`, a library tha
 
 
 ## Development
----
 So far this has been my passion project and is currently solo developed by me. I'm always adding new features and working on new concepts. I'd love to continue this project and I'd appreciate any and all help I can get. If anybody is interested/willing to contribute please email me (caleb.cleavinger@gmail.com).
 
 ## Roadmap
----
 
 - [x] Swtich form JSON to a binary intermediary format; smaller file sizes, more efficient JIT compilation, and langauge agnostic
 - [x] Add shared memory features
