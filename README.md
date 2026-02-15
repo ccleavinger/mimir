@@ -14,18 +14,18 @@ This project is still in early development, expect breaking changes and/or unexp
 ---
 Below is an example taken directly from the naive Matmul example
 ```rust
-// Matrix multiplication kernel (A @ B = C) with global memory coalescing
+// Naive matrix multiplication kernel
 #[mimir_global]
 fn matmul_naive_kernel(A: &[f32], B: &[f32], C: &mut [f32], m: i32, n: i32, k: i32) {
-    let row = block_idx.y * block_dim.y + thread_idx.y;
-    let col = block_idx.x * block_dim.x + thread_idx.x;
+    let row = (block_idx.y * block_dim.y + thread_idx.y) as i32;
+    let col = (block_idx.x * block_dim.x + thread_idx.x) as i32;
 
     if row < m && col < k {
         let mut sum = 0.0;
         for i in 0..n {
-            sum += A[(row * n + i) as usize] * B[(i * k + col) as usize];
+            sum += A[(row * n + i) as i32] * B[(i * k + col) as i32];
         }
-        C[(row * k + col) as usize] = sum;
+        C[(row * k + col) as i32] = sum;
     }
 }
 ```
@@ -52,7 +52,6 @@ Running the kernel:
         1,
     ];
 
-    // Warm-up run
     launch! {
         matmul_naive_kernel<<<grid_dim, block_dim>>>(
             &a_gpu,
@@ -65,22 +64,33 @@ Running the kernel:
     }?;
 ```
 
-If you wish to use Mimir in a project include `mimir-gpu` and your backend of choice (only `mimir-vulkan` as of now). Import whatever macros you need from mimir-gpu and import all from your backend of choice (i.e. `use mimir_vulkan::*;`)
+If you wish to use Mimir in a project include `mimi-omni-runtime`, a library that will support multiple GPU vendor backends with great ease (currently Vulkan is only supported, CUDA is in the works). Import whatever macros you need from mimir-macros and import all from `mimir-omni-runtime` library (`use mimir_omni_runtime::*;`).
 
 
 ## Development
 ---
-So far this has been my passion project and solo developed by me. I'm always adding new features and working on new concepts. I'd love to continue this project and I'd appreciate any and all help I can get. If anybody is interested/willing to contribute please email me (caleb.cleavinger@gmail.com).
+So far this has been my passion project and is currently solo developed by me. I'm always adding new features and working on new concepts. I'd love to continue this project and I'd appreciate any and all help I can get. If anybody is interested/willing to contribute please email me (caleb.cleavinger@gmail.com).
 
 ## Roadmap
 ---
 
-- [x] Binary intermediary format; smaller file sizes, more efficient JIT compilation, and langauge agnostic
+- [x] Swtich form JSON to a binary intermediary format; smaller file sizes, more efficient JIT compilation, and langauge agnostic
 - [x] Add shared memory features
-- [ ] Stricter typing
-    - specification checks do exist but are not good enough yet 
+- [ ] Full Mimir IR and JIT runtime specification
+    - [ ] Stricter typing
+        - specification checks do exist but are not good enough yet
+        - Indexing should be moved to unsigned integers to prevent out of bounds indexing
+    - [ ] Standard library specification
+        - I.e. how math and util functions should work across multiple vendor APIs 
 - [ ] Kernel Templating
     - [x] Constant generics
-    - [ ] Type Generics  
-- [ ] CUDA backend
-- [ ] Tenstorrent/RISC-V accelerator backend???
+    - [ ] Type Generics
+- [ ] Software/Hardware support for cooperative matrices
+    - Implemented either using vendor extensions/libraries or equivalent software implementations in each JIT compiler
+- [ ] Backends
+    - [ ] Vulkan compute  
+    - [ ] CUDA backend
+    - [ ] AMD ROCm backend
+        - very difficult, not sure if it will happen 
+    - [ ] Tenstorrent/RISC-V accelerator backend???
+        - very very difficult, highly unlikely 
