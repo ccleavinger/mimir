@@ -3,9 +3,9 @@ use mimir_omni_runtime::*;
 use rand::Rng;
 use std::time::Instant;
 
-const M: i32 = 256*4;
-const N: i32 = 256*4;
-const K: i32 = 256*4;
+const M: i32 = 256 * 6;
+const N: i32 = 256 * 6;
+const K: i32 = 256 * 6;
 
 #[mimir_global]
 fn matmul_naive_kernel(A: &[f32], B: &[f32], C: &mut [f32], m: i32, n: i32, k: i32) {
@@ -32,8 +32,8 @@ fn sgemm_shared_mem_block<const BLOCKSIZE: u32>(
     beta: f32,
     C: &mut [f32],
 ) {
-    let c_row = block_idx.x;  // Which C tile row this block computes
-    let c_col = block_idx.y;  // Which C tile col this block computes
+    let c_row = block_idx.x; // Which C tile row this block computes
+    let c_col = block_idx.y; // Which C tile col this block computes
 
     #[shared]
     let mut As = [0f32; (BLOCKSIZE * BLOCKSIZE)];
@@ -59,7 +59,7 @@ fn sgemm_shared_mem_block<const BLOCKSIZE: u32>(
         if thread_row < BLOCKSIZE && thread_col < BLOCKSIZE {
             let a_global_row = c_row * BLOCKSIZE + thread_row;
             let a_global_col = (bk_idx as u32) + thread_col;
-            
+
             if a_global_row < (m as u32) && a_global_col < (k as u32) {
                 let a_idx = a_global_row * (k as u32) + a_global_col;
                 As[(thread_row * BLOCKSIZE + thread_col) as i32] = A[a_idx as i32];
@@ -72,7 +72,7 @@ fn sgemm_shared_mem_block<const BLOCKSIZE: u32>(
         if thread_row < BLOCKSIZE && thread_col < BLOCKSIZE {
             let b_global_row = (bk_idx as u32) + thread_row;
             let b_global_col = c_col * BLOCKSIZE + thread_col;
-            
+
             if b_global_row < (k as u32) && b_global_col < (n as u32) {
                 let b_idx = b_global_row * (n as u32) + b_global_col;
                 Bs[(thread_row * BLOCKSIZE + thread_col) as i32] = B[b_idx as i32];
@@ -86,8 +86,8 @@ fn sgemm_shared_mem_block<const BLOCKSIZE: u32>(
         // Compute dot product for this tile
         if thread_row < BLOCKSIZE && thread_col < BLOCKSIZE {
             for dot_idx in 0..(BLOCKSIZE as i32) {
-                tmp += As[(thread_row * BLOCKSIZE + (dot_idx as u32)) as i32] *
-                       Bs[((dot_idx as u32) * BLOCKSIZE + thread_col) as i32];
+                tmp += As[(thread_row * BLOCKSIZE + (dot_idx as u32)) as i32]
+                    * Bs[((dot_idx as u32) * BLOCKSIZE + thread_col) as i32];
             }
         }
 
@@ -98,7 +98,7 @@ fn sgemm_shared_mem_block<const BLOCKSIZE: u32>(
     if thread_row < BLOCKSIZE && thread_col < BLOCKSIZE {
         let c_global_row = c_row * BLOCKSIZE + thread_row;
         let c_global_col = c_col * BLOCKSIZE + thread_col;
-        
+
         if c_global_row < (m as u32) && c_global_col < (n as u32) {
             let c_idx = c_global_row * (n as u32) + c_global_col;
             C[c_idx as i32] = alpha * tmp + beta * C[c_idx as i32];
@@ -181,7 +181,10 @@ fn run_sgemm_shared_block(
         1,
     ];
 
-    println!("Launching tiled kernel with grid: {:?}, block: {:?}", grid_dim, block_dim);
+    println!(
+        "Launching tiled kernel with grid: {:?}, block: {:?}",
+        grid_dim, block_dim
+    );
 
     // sgemm shared block warm-up run
     launch! {
@@ -246,10 +249,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         cpu_matmul(&a_host, &b_host, &mut c_host_cpu, M, N, K);
         let duration = start_time.elapsed();
 
-        println!(
-            "CPU Matmul ({}x{}x{}) took: {:.2?}",
-            M, N, K, duration
-        );
+        println!("CPU Matmul ({}x{}x{}) took: {:.2?}", M, N, K, duration);
 
         let mut naive_mismatch = false;
         for i in 0..(M * K) as usize {
@@ -259,7 +259,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     i, c_host_gpu[i], c_host_cpu[i]
                 );
                 naive_mismatch = true;
-                if i < 10 { break; } // Show first few mismatches
+                if i < 10 {
+                    break;
+                } // Show first few mismatches
             }
         }
         if !naive_mismatch {
@@ -276,7 +278,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     i, c_host_gpu2[i], c_host_cpu[i]
                 );
                 tiled_mismatch = true;
-                if i < 10 { break; } // Show first few mismatches
+                if i < 10 {
+                    break;
+                } // Show first few mismatches
             }
         }
         if !tiled_mismatch {

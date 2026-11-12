@@ -12,16 +12,17 @@ repository = "https://github.com/ccleavinger/mimir/tree/master/crates/mimir-gpu"
 proc-macro = true
 
 [dependencies]
-syn = { version = "2.0.90", features = ["full"] }
-quote = "1.0"
-mimir-ir = { path = "../mimir-ir" }
-mimir-runtime = { path = "../mimir-runtime" }
-mimir-rs-compiler = { path = "../mimir-rs-compiler" }
-cfg-if = "1.0.0"
-proc-macro-error2 = "2.0.1"
-proc-macro2 = "1.0.101"
-small_uid = "0.2.4"
-regex = "1.12"
+mimir-ir.workspace = true
+mimir-runtime.workspace = true
+mimir-rs-compiler.workspace = true
+
+syn.workspace = true
+quote.workspace = true
+cfg-if.workspace = true
+proc-macro-error3.workspace = true
+proc-macro2.workspace = true
+small_uid.workspace = true
+regex.workspace = true
 
 [features]
 

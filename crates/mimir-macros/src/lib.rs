@@ -8,7 +8,7 @@ use std::path::PathBuf;
 
 use mimir_ir::ir::{MimirIRData, MimirIRKind, MimirPrimitiveTy, MimirTy, MimirTyScope};
 use proc_macro::TokenStream;
-use proc_macro_error2::{abort, proc_macro_error};
+use proc_macro_error3::{abort, proc_macro_error};
 use quote::quote;
 use regex::Regex;
 use syn::parse::{Parse, ParseStream};

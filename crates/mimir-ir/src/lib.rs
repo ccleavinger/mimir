@@ -1,3 +1,4 @@
+pub mod flat;
 pub mod io;
 pub mod ir;
 pub mod kernel_ir;

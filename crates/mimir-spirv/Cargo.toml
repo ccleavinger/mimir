@@ -1,5 +1,5 @@
 [package]
-name = "mimir-vulkan-spirv-compiler"
+name = "mimir-spirv"
 version = "0.1.0"
 edition = "2021"
 authors = ["Caleb Cleavinger caleb.cleavinger@gmail.com"]
@@ -8,6 +8,6 @@ license = "MIT or Apache-2.0"
 repository = "https://github.com/ccleavinger/mimir/tree/master/crates/spirv-compiler"
 
 [dependencies]
-mimir-ir = { path = "../mimir-ir" }
-mimir-runtime = { path = "../mimir-runtime" }
-rspirv = "0.12.0"
+mimir-ir.workspace = true
+mimir-runtime.workspace = true
+rspirv.workspace = true

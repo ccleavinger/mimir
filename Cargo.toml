@@ -5,3 +5,46 @@ resolver = "3"
 [workspace.package]
 license = "MIT OR Apache-2.0"
 description = "Workspace for Mimir"
+
+[workspace.dependencies]
+mimir-ast = { path = "crates/mimir-ast" }
+mimir-ir = { path = "crates/mimir-ir" }
+mimir-macros = { path = "crates/mimir-macros" }
+mimir-omni-runtime = { path = "crates/mimir-omni-runtime" }
+mimir-resolver = { path = "crates/mimir-resolver" }
+mimir-rs-compiler = { path = "crates/mimir-rs-compiler" }
+mimir-runtime = { path = "crates/mimir-runtime" }
+mimir-spirv = { path = "crates/mimir-spirv" }
+mimir-vulkan = { path = "crates/mimir-vulkan" }
+
+# external crates
+
+## GPU crates
+
+### Vulkan
+ash = "0.38.0"
+vk-mem = "0.5"
+rspirv = "0.13"
+
+
+## Error management & logging
+anyhow = "1.0"
+thiserror = "2.0"
+log = "0.4"
+
+## async & multi-threaded crates
+futures = "0.3"
+serde = "1.0"
+parking_lot = "0.13"
+
+## low level stuff
+libc = "0.2"
+
+## proc macro and parsing stuff
+syn = { version = "3.0", features = ["full"] }
+quote = "1.0"
+proc-macro-error3 = "3.1"
+proc-macro2 = "1.0"
+regex = "1.13"
+cfg-if = "1.0"
+small_uid = "0.2"
