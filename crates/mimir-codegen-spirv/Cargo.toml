@@ -1,0 +1,9 @@
+[package]
+name = "mimir-codegen-spirv"
+version = "0.1.0"
+edition = "2024"
+license.workspace = true
+[dependencies]
+mimir-ir.workspace = true
+rspirv.workspace = true
+thiserror.workspace = true

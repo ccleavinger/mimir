@@ -1,5 +1,3 @@
-use crate::RichConstExpr;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PrimitiveTy {
     Int32,

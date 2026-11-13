@@ -73,7 +73,7 @@
 //! Serde supports editable IR artifacts; deserialized modules require validation.
 //! Canonical bytes use a versioned postcard schema for identity, not a finalized
 //! GPU instruction encoding. Semantic/schema changes require a new identity
-//! version. Legacy AST-shaped IR modules remain until frontend/backend migration.
+//! version. The Rust-oriented AST lives separately in `mimir-ast`.
 mod identity;
 mod specialize;
 mod types;
@@ -84,3 +84,6 @@ pub use specialize::{
 };
 pub use types::*;
 pub use validate::{ValidatedModule, ValidationError};
+
+mod artifact;
+pub use artifact::{ARTIFACT_VERSION, ArtifactError};

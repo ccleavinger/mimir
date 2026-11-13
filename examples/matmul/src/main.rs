@@ -1,11 +1,12 @@
-use mimir_macros::{launch, mimir_global};
-use mimir_omni_runtime::*;
+use mimir::GpuArray;
+use mimir::{launch, mimir_global};
+
 use rand::Rng;
 use std::time::Instant;
 
-const M: i32 = 256 * 6;
-const N: i32 = 256 * 6;
-const K: i32 = 256 * 6;
+const M: i32 = 128;
+const N: i32 = 128;
+const K: i32 = 128;
 
 #[mimir_global]
 fn matmul_naive_kernel(A: &[f32], B: &[f32], C: &mut [f32], m: i32, n: i32, k: i32) {
@@ -119,9 +120,9 @@ fn cpu_matmul(a: &[f32], b: &[f32], c: &mut [f32], m: i32, n: i32, k: i32) {
 }
 
 fn run_naive(
-    a_gpu: &MimirGPUArray<f32>,
-    b_gpu: &MimirGPUArray<f32>,
-    mut c_gpu: MimirGPUArray<f32>,
+    a_gpu: &GpuArray<f32>,
+    b_gpu: &GpuArray<f32>,
+    c_gpu: GpuArray<f32>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Configure launch parameters
     let block_dim = [16, 16, 1];
@@ -132,29 +133,11 @@ fn run_naive(
     ];
 
     // Naive matmul warm-up run
-    launch! {
-        matmul_naive_kernel<<<grid_dim, block_dim>>>(
-            &a_gpu,
-            &b_gpu,
-            &mut c_gpu,
-            M,
-            N,
-            K,
-        );
-    }?;
+    unsafe { launch!(matmul_naive_kernel<<<grid_dim,block_dim>>>(a_gpu,b_gpu,c_gpu,M,N,K)) }?;
 
     // Timed run
     let start_time = Instant::now();
-    launch! {
-        matmul_naive_kernel<<<grid_dim, block_dim>>>(
-            &a_gpu,
-            &b_gpu,
-            &mut c_gpu,
-            M,
-            N,
-            K
-        );
-    }?;
+    unsafe { launch!(matmul_naive_kernel<<<grid_dim,block_dim>>>(a_gpu,b_gpu,c_gpu,M,N,K)) }?;
     let duration = start_time.elapsed();
 
     println!(
@@ -165,9 +148,9 @@ fn run_naive(
 }
 
 fn run_sgemm_shared_block(
-    a_gpu: &MimirGPUArray<f32>,
-    b_gpu: &MimirGPUArray<f32>,
-    mut c_gpu: MimirGPUArray<f32>,
+    a_gpu: &GpuArray<f32>,
+    b_gpu: &GpuArray<f32>,
+    c_gpu: GpuArray<f32>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     const BETA: f32 = 0.0f32;
     const ALPHA: f32 = 1.0f32;
@@ -187,32 +170,18 @@ fn run_sgemm_shared_block(
     );
 
     // sgemm shared block warm-up run
-    launch! {
-        sgemm_shared_mem_block<BLOCKSIZE><<<grid_dim, block_dim>>>(
-            M,
-            K,
-            N,
-            ALPHA,
-            &a_gpu,
-            &b_gpu,
-            BETA,
-            &mut c_gpu,
-        );
+    unsafe {
+        launch! {
+            sgemm_shared_mem_block<BLOCKSIZE><<<grid_dim,block_dim>>>(M,K,N,ALPHA,a_gpu,b_gpu,BETA,c_gpu)
+        }
     }?;
 
     // Timed run
     let start_time = Instant::now();
-    launch! {
-        sgemm_shared_mem_block<BLOCKSIZE><<<grid_dim, block_dim>>>(
-            M,
-            K,
-            N,
-            ALPHA,
-            &a_gpu,
-            &b_gpu,
-            BETA,
-            &mut c_gpu,
-        );
+    unsafe {
+        launch! {
+            sgemm_shared_mem_block<BLOCKSIZE><<<grid_dim,block_dim>>>(M,K,N,ALPHA,a_gpu,b_gpu,BETA,c_gpu)
+        }
     }?;
     let duration = start_time.elapsed();
 
@@ -232,17 +201,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     {
         // Allocate GPU memory
-        let a_gpu = mimir_gpu_arr::from_iter(a_host.clone())?;
-        let b_gpu = mimir_gpu_arr::from_iter(b_host.clone())?;
-        let c_gpu = mimir_gpu_arr::from_iter(vec![0.0f32; (M * K) as usize])?;
+        let a_gpu = GpuArray::from_iter(a_host.clone())?;
+        let b_gpu = GpuArray::from_iter(b_host.clone())?;
+        let c_gpu = GpuArray::from_iter(vec![0.0f32; (M * K) as usize])?;
 
         run_naive(&a_gpu, &b_gpu, c_gpu.clone())?;
 
-        let c_gpu2 = mimir_gpu_arr::from_iter(vec![0.0f32; (M * K) as usize])?;
+        let c_gpu2 = GpuArray::from_iter(vec![0.0f32; (M * K) as usize])?;
         run_sgemm_shared_block(&a_gpu, &b_gpu, c_gpu2.clone())?;
 
         // Verify results for naive kernel
-        let c_host_gpu: Vec<f32> = c_gpu.to_iter().collect();
+        let c_host_gpu: Vec<f32> = c_gpu.to_vec()?;
         let mut c_host_cpu = vec![0.0f32; (M * K) as usize];
 
         let start_time = Instant::now();
@@ -269,7 +238,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         // Verify results for tiled kernel
-        let c_host_gpu2: Vec<f32> = c_gpu2.to_iter().collect();
+        let c_host_gpu2: Vec<f32> = c_gpu2.to_vec()?;
         let mut tiled_mismatch = false;
         for i in 0..(M * K) as usize {
             if (c_host_gpu2[i] - c_host_cpu[i]).abs() > 1e-3 {
@@ -282,6 +251,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     break;
                 } // Show first few mismatches
             }
+        }
+        if naive_mismatch || tiled_mismatch {
+            return Err("GPU matrix multiplication disagrees with CPU reference".into());
         }
         if !tiled_mismatch {
             println!("Tiled kernel verification passed!");

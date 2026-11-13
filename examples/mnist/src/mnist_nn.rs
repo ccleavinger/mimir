@@ -1,6 +1,8 @@
 use indicatif::ProgressBar;
-use mimir_macros::{launch, mimir_global};
-use mimir_omni_runtime::*;
+use mimir::default_runtime as runtime;
+use mimir::{Argument, ir::Literal, mimir_global};
+use mimir::{GpuArray, default_device as device};
+
 use mnist::MnistBuilder;
 use rand::distr::{Distribution, Uniform};
 use std::time::Instant;
@@ -15,14 +17,14 @@ pub const EPOCHS: usize = 20;
 
 // Neural Network Structure
 pub struct NeuralNetwork {
-    weights1: MimirGPUArray<f32>,
-    weights2: MimirGPUArray<f32>,
-    bias1: MimirGPUArray<f32>,
-    bias2: MimirGPUArray<f32>,
-    grad_weights1: MimirGPUArray<f32>,
-    grad_weights2: MimirGPUArray<f32>,
-    grad_bias1: MimirGPUArray<f32>,
-    grad_bias2: MimirGPUArray<f32>,
+    weights1: GpuArray<f32>,
+    weights2: GpuArray<f32>,
+    bias1: GpuArray<f32>,
+    bias2: GpuArray<f32>,
+    grad_weights1: GpuArray<f32>,
+    grad_weights2: GpuArray<f32>,
+    grad_bias1: GpuArray<f32>,
+    grad_bias2: GpuArray<f32>,
 }
 
 // Matrix multiplication kernel (A @ B = C)
@@ -224,16 +226,16 @@ impl NeuralNetwork {
         }
 
         // Create GPU arrays
-        let weights1_gpu = mimir_gpu_arr::from_iter(weights1)?;
-        let weights2_gpu = mimir_gpu_arr::from_iter(weights2)?;
-        let bias1_gpu = mimir_gpu_arr::from_iter(bias1)?;
-        let bias2_gpu = mimir_gpu_arr::from_iter(bias2)?;
+        let weights1_gpu = GpuArray::from_iter(weights1)?;
+        let weights2_gpu = GpuArray::from_iter(weights2)?;
+        let bias1_gpu = GpuArray::from_iter(bias1)?;
+        let bias2_gpu = GpuArray::from_iter(bias2)?;
 
         // Create gradient arrays (initialized to zeros during training)
-        let grad_weights1_gpu = mimir_gpu_arr::from_iter(vec![0.0; HIDDEN_SIZE * INPUT_SIZE])?;
-        let grad_weights2_gpu = mimir_gpu_arr::from_iter(vec![0.0; OUTPUT_SIZE * HIDDEN_SIZE])?;
-        let grad_bias1_gpu = mimir_gpu_arr::from_iter(vec![0.0; HIDDEN_SIZE])?;
-        let grad_bias2_gpu = mimir_gpu_arr::from_iter(vec![0.0; OUTPUT_SIZE])?;
+        let grad_weights1_gpu = GpuArray::from_iter(vec![0.0; HIDDEN_SIZE * INPUT_SIZE])?;
+        let grad_weights2_gpu = GpuArray::from_iter(vec![0.0; OUTPUT_SIZE * HIDDEN_SIZE])?;
+        let grad_bias1_gpu = GpuArray::from_iter(vec![0.0; HIDDEN_SIZE])?;
+        let grad_bias2_gpu = GpuArray::from_iter(vec![0.0; OUTPUT_SIZE])?;
 
         Ok(NeuralNetwork {
             weights1: weights1_gpu,
@@ -249,9 +251,9 @@ impl NeuralNetwork {
 
     pub fn forward(
         &self,
-        input: &MimirGPUArray<f32>,
-        hidden: &mut MimirGPUArray<f32>,
-        output: &mut MimirGPUArray<f32>,
+        input: &GpuArray<f32>,
+        hidden: &mut GpuArray<f32>,
+        output: &mut GpuArray<f32>,
         batch_size: usize,
     ) -> anyhow::Result<()> {
         // Define block and grid sizes
@@ -263,15 +265,21 @@ impl NeuralNetwork {
         ] as [u32; 3];
 
         //println!("Input to Hidden (X @ W1)");
-        launch! {
-            matmul_a_b_kernel<<<grid_size_hidden, block_size>>>(
-                input,
-                &self.weights1,
-                hidden,
-                batch_size as i32,
-                INPUT_SIZE as i32,
-                HIDDEN_SIZE as i32
-            );
+        unsafe {
+            device()?.launch(
+                &runtime()?.kernel(matmul_a_b_kernel)?,
+                &[],
+                grid_size_hidden,
+                block_size,
+                &[
+                    Argument::Buffer(&(input).as_buffer()),
+                    Argument::Buffer(&(&self.weights1).as_buffer()),
+                    Argument::Buffer(&(hidden).as_buffer()),
+                    Argument::Scalar(Literal::I32(batch_size as i32)),
+                    Argument::Scalar(Literal::I32(INPUT_SIZE as i32)),
+                    Argument::Scalar(Literal::I32(HIDDEN_SIZE as i32)),
+                ],
+            )
         }?;
         //println!("Finished Input to Hidden (X @ W1)");
 
@@ -283,13 +291,19 @@ impl NeuralNetwork {
             let block_size = [bias_block_size, 1, 1] as [u32; 3];
             let grid_size = [bias_grid_size, 1, 1] as [u32; 3];
 
-            launch! {
-                bias_add_kernel<<<grid_size, block_size>>>(
-                    hidden,
-                    &self.bias1,
-                    batch_size as i32,
-                    HIDDEN_SIZE as i32
-                );
+            unsafe {
+                device()?.launch(
+                    &runtime()?.kernel(bias_add_kernel)?,
+                    &[],
+                    grid_size,
+                    block_size,
+                    &[
+                        Argument::Buffer(&(hidden).as_buffer()),
+                        Argument::Buffer(&(&self.bias1).as_buffer()),
+                        Argument::Scalar(Literal::I32(batch_size as i32)),
+                        Argument::Scalar(Literal::I32(HIDDEN_SIZE as i32)),
+                    ],
+                )
             }?;
         }
         //println!("Finished add bias1");
@@ -302,11 +316,17 @@ impl NeuralNetwork {
             let block_size = [relu_block_size, 1, 1] as [u32; 3];
             let grid_size = [relu_grid_size, 1, 1] as [u32; 3];
 
-            launch! {
-                relu_kernel<<<grid_size, block_size>>>(
-                    hidden,
-                    (batch_size * HIDDEN_SIZE) as i32
-                );
+            unsafe {
+                device()?.launch(
+                    &runtime()?.kernel(relu_kernel)?,
+                    &[],
+                    grid_size,
+                    block_size,
+                    &[
+                        Argument::Buffer(&(hidden).as_buffer()),
+                        Argument::Scalar(Literal::I32((batch_size * HIDDEN_SIZE) as i32)),
+                    ],
+                )
             }?;
         }
         //println!("Finished Apply ReLU");
@@ -318,15 +338,21 @@ impl NeuralNetwork {
             1,
         ] as [u32; 3];
 
-        launch! {
-            matmul_a_b_kernel<<<grid_size_output, block_size>>>(
-                hidden,
-                &self.weights2,
-                output,
-                batch_size as i32,
-                HIDDEN_SIZE as i32,
-                OUTPUT_SIZE as i32
-            );
+        unsafe {
+            device()?.launch(
+                &runtime()?.kernel(matmul_a_b_kernel)?,
+                &[],
+                grid_size_output,
+                block_size,
+                &[
+                    Argument::Buffer(&(hidden).as_buffer()),
+                    Argument::Buffer(&(&self.weights2).as_buffer()),
+                    Argument::Buffer(&(output).as_buffer()),
+                    Argument::Scalar(Literal::I32(batch_size as i32)),
+                    Argument::Scalar(Literal::I32(HIDDEN_SIZE as i32)),
+                    Argument::Scalar(Literal::I32(OUTPUT_SIZE as i32)),
+                ],
+            )
         }?;
         //println!("Finished Hidden to Output (W2)");
 
@@ -337,13 +363,19 @@ impl NeuralNetwork {
             let grid_size = [bias_grid_size, 1, 1] as [u32; 3];
             let block_size = [bias_block_size, 1, 1] as [u32; 3];
 
-            launch! {
-                bias_add_kernel<<<grid_size, block_size>>>(
-                    output,
-                    &self.bias2,
-                    batch_size as i32,
-                    OUTPUT_SIZE as i32
-                );
+            unsafe {
+                device()?.launch(
+                    &runtime()?.kernel(bias_add_kernel)?,
+                    &[],
+                    grid_size,
+                    block_size,
+                    &[
+                        Argument::Buffer(&(output).as_buffer()),
+                        Argument::Buffer(&(&self.bias2).as_buffer()),
+                        Argument::Scalar(Literal::I32(batch_size as i32)),
+                        Argument::Scalar(Literal::I32(OUTPUT_SIZE as i32)),
+                    ],
+                )
             }?;
         }
         //println!("Finished Add bias2");
@@ -354,12 +386,18 @@ impl NeuralNetwork {
             let block_size = [1, 1, 1];
 
             // Apply softmax
-            launch! {
-                softmax_kernel<<<grid_size, block_size>>>(
-                    output,
-                    batch_size as i32,
-                    OUTPUT_SIZE as i32
-                );
+            unsafe {
+                device()?.launch(
+                    &runtime()?.kernel(softmax_kernel)?,
+                    &[],
+                    grid_size,
+                    block_size,
+                    &[
+                        Argument::Buffer(&(output).as_buffer()),
+                        Argument::Scalar(Literal::I32(batch_size as i32)),
+                        Argument::Scalar(Literal::I32(OUTPUT_SIZE as i32)),
+                    ],
+                )
             }?;
         }
         //println!("Finished Softmax");
@@ -369,10 +407,10 @@ impl NeuralNetwork {
 
     pub fn backward(
         &mut self,
-        input: &MimirGPUArray<f32>,
-        hidden: &MimirGPUArray<f32>,
-        output: &MimirGPUArray<f32>,
-        labels: &MimirGPUArray<i32>,
+        input: &GpuArray<f32>,
+        hidden: &GpuArray<f32>,
+        output: &GpuArray<f32>,
+        labels: &GpuArray<i32>,
         batch_size: usize,
     ) -> anyhow::Result<()> {
         // Zero out gradients
@@ -384,58 +422,88 @@ impl NeuralNetwork {
         let w1_grid = [w1_grid_size, 1, 1];
         let zero_block = [zero_block_size, 1, 1];
 
-        launch! {
-            zero_grad_kernel<<<w1_grid, zero_block>>>(
-                &self.grad_weights1,
-                w1_size as i32
-            );
+        unsafe {
+            device()?.launch(
+                &runtime()?.kernel(zero_grad_kernel)?,
+                &[],
+                w1_grid,
+                zero_block,
+                &[
+                    Argument::Buffer(&(&self.grad_weights1).as_buffer()),
+                    Argument::Scalar(Literal::I32(w1_size as i32)),
+                ],
+            )
         }?;
 
         let w2_size = OUTPUT_SIZE * HIDDEN_SIZE;
         let w2_grid_size = (w2_size as u32).div_ceil(zero_block_size);
 
         let w2_grid = [w2_grid_size, 1, 1];
-        launch! {
-            zero_grad_kernel<<<w2_grid, zero_block>>>(
-                &self.grad_weights2,
-                w2_size as i32
-            );
+        unsafe {
+            device()?.launch(
+                &runtime()?.kernel(zero_grad_kernel)?,
+                &[],
+                w2_grid,
+                zero_block,
+                &[
+                    Argument::Buffer(&(&self.grad_weights2).as_buffer()),
+                    Argument::Scalar(Literal::I32(w2_size as i32)),
+                ],
+            )
         }?;
 
         let b1_grid_size = (HIDDEN_SIZE as u32).div_ceil(zero_block_size);
 
         let b1_grid = [b1_grid_size, 1, 1];
-        launch! {
-            zero_grad_kernel<<<b1_grid, zero_block>>>(
-                &self.grad_bias1,
-                HIDDEN_SIZE as i32
-            );
+        unsafe {
+            device()?.launch(
+                &runtime()?.kernel(zero_grad_kernel)?,
+                &[],
+                b1_grid,
+                zero_block,
+                &[
+                    Argument::Buffer(&(&self.grad_bias1).as_buffer()),
+                    Argument::Scalar(Literal::I32(HIDDEN_SIZE as i32)),
+                ],
+            )
         }?;
 
         let b2_grid_size = (OUTPUT_SIZE as u32).div_ceil(zero_block_size);
 
         let b2_grid = [b2_grid_size, 1, 1];
-        launch! {
-            zero_grad_kernel<<<b2_grid, zero_block>>>(
-                &self.grad_bias2,
-                OUTPUT_SIZE as i32
-            );
+        unsafe {
+            device()?.launch(
+                &runtime()?.kernel(zero_grad_kernel)?,
+                &[],
+                b2_grid,
+                zero_block,
+                &[
+                    Argument::Buffer(&(&self.grad_bias2).as_buffer()),
+                    Argument::Scalar(Literal::I32(OUTPUT_SIZE as i32)),
+                ],
+            )
         }?;
 
         // Compute output gradients
-        let mut grad_output = mimir_gpu_arr::from_iter(vec![0.0; batch_size * OUTPUT_SIZE])?;
+        let mut grad_output = GpuArray::from_iter(vec![0.0; batch_size * OUTPUT_SIZE])?;
         let output_grad_block_size = 256;
         let output_grad_grid_size = ((batch_size) as u32).div_ceil(output_grad_block_size);
 
         let output_grad_grid = [output_grad_grid_size, 1, 1];
         let output_grad_block = [output_grad_block_size, 1, 1];
-        launch! {
-            compute_output_gradients_kernel<<<output_grad_grid, output_grad_block>>>(
-                &mut grad_output,
-                output,
-                labels,
-                batch_size as i32
-            );
+        unsafe {
+            device()?.launch(
+                &runtime()?.kernel(compute_output_gradients_kernel)?,
+                &[],
+                output_grad_grid,
+                output_grad_block,
+                &[
+                    Argument::Buffer(&(&mut grad_output).as_buffer()),
+                    Argument::Buffer(&(output).as_buffer()),
+                    Argument::Buffer(&(labels).as_buffer()),
+                    Argument::Scalar(Literal::I32(batch_size as i32)),
+                ],
+            )
         }?;
 
         // Update gradients for weights2 (W2.grad = hidden.T @ grad_output)
@@ -446,61 +514,85 @@ impl NeuralNetwork {
             1,
         ] as [u32; 3];
 
-        launch! {
-            matmul_at_b_kernel<<<grid_size_w2, block_size>>>(
-                hidden,
-                &grad_output,
-                &self.grad_weights2,
-                batch_size as i32,
-                HIDDEN_SIZE as i32,
-                OUTPUT_SIZE as i32
-            );
+        unsafe {
+            device()?.launch(
+                &runtime()?.kernel(matmul_at_b_kernel)?,
+                &[],
+                grid_size_w2,
+                block_size,
+                &[
+                    Argument::Buffer(&(hidden).as_buffer()),
+                    Argument::Buffer(&(&grad_output).as_buffer()),
+                    Argument::Buffer(&(&self.grad_weights2).as_buffer()),
+                    Argument::Scalar(Literal::I32(batch_size as i32)),
+                    Argument::Scalar(Literal::I32(HIDDEN_SIZE as i32)),
+                    Argument::Scalar(Literal::I32(OUTPUT_SIZE as i32)),
+                ],
+            )
         }?;
 
         // Compute dX2 (gradient of loss w.r.t. input of second layer)
-        let mut d_d_x2 = mimir_gpu_arr::from_iter(vec![0.0; batch_size * HIDDEN_SIZE])?;
+        let mut d_d_x2 = GpuArray::from_iter(vec![0.0; batch_size * HIDDEN_SIZE])?;
         let grid_size_d_x2 = [
             (HIDDEN_SIZE as u32).div_ceil(block_size[0]),
             (batch_size as u32).div_ceil(block_size[1]),
             1,
         ] as [u32; 3];
 
-        launch! {
-            matmul_a_bt_kernel<<<grid_size_d_x2, block_size>>>(
-                &grad_output,
-                &self.weights2,
-                &mut d_d_x2,
-                batch_size as i32,
-                OUTPUT_SIZE as i32,
-                HIDDEN_SIZE as i32
-            );
+        unsafe {
+            device()?.launch(
+                &runtime()?.kernel(matmul_a_bt_kernel)?,
+                &[],
+                grid_size_d_x2,
+                block_size,
+                &[
+                    Argument::Buffer(&(&grad_output).as_buffer()),
+                    Argument::Buffer(&(&self.weights2).as_buffer()),
+                    Argument::Buffer(&(&mut d_d_x2).as_buffer()),
+                    Argument::Scalar(Literal::I32(batch_size as i32)),
+                    Argument::Scalar(Literal::I32(OUTPUT_SIZE as i32)),
+                    Argument::Scalar(Literal::I32(HIDDEN_SIZE as i32)),
+                ],
+            )
         }?;
 
         // Compute ReLU derivative
-        let mut grad_hidden = mimir_gpu_arr::from_iter(vec![0.0; batch_size * HIDDEN_SIZE])?;
+        let mut grad_hidden = GpuArray::from_iter(vec![0.0; batch_size * HIDDEN_SIZE])?;
         let hidden_grad_block_size = 256;
         let hidden_grad_grid_size =
             ((batch_size * HIDDEN_SIZE) as u32).div_ceil(hidden_grad_block_size);
 
         let hidden_grad_grid = [hidden_grad_grid_size, 1, 1];
         let hidden_grad_block = [hidden_grad_block_size, 1, 1];
-        launch! {
-            drelu_kernel<<<hidden_grad_grid, hidden_grad_block>>>(
-                hidden,
-                &mut grad_hidden,
-                (batch_size * HIDDEN_SIZE) as i32
-            );
+        unsafe {
+            device()?.launch(
+                &runtime()?.kernel(drelu_kernel)?,
+                &[],
+                hidden_grad_grid,
+                hidden_grad_block,
+                &[
+                    Argument::Buffer(&(hidden).as_buffer()),
+                    Argument::Buffer(&(&mut grad_hidden).as_buffer()),
+                    Argument::Scalar(Literal::I32((batch_size * HIDDEN_SIZE) as i32)),
+                ],
+            )
         }?;
 
         // Element-wise multiplication for backprop through ReLU
         let hidden_grad_grid = [hidden_grad_grid_size, 1, 1];
         let hidden_grad_block = [hidden_grad_block_size, 1, 1];
-        launch! {
-            multiply_gradients_kernel<<<hidden_grad_grid, hidden_grad_block>>>(
-                &mut d_d_x2,
-                &grad_hidden,
-                (batch_size * HIDDEN_SIZE) as i32
-            );
+        unsafe {
+            device()?.launch(
+                &runtime()?.kernel(multiply_gradients_kernel)?,
+                &[],
+                hidden_grad_grid,
+                hidden_grad_block,
+                &[
+                    Argument::Buffer(&(&mut d_d_x2).as_buffer()),
+                    Argument::Buffer(&(&grad_hidden).as_buffer()),
+                    Argument::Scalar(Literal::I32((batch_size * HIDDEN_SIZE) as i32)),
+                ],
+            )
         }?;
 
         // Update gradients for weights1 (W1.grad = input.T @ d_dX2)
@@ -513,20 +605,26 @@ impl NeuralNetwork {
         // println!("Calculating grad_weights1");
         // println!("grid_size: {:?}\nblock_size: {:?}", grid_size_w1, block_size);
 
-        launch! {
-            matmul_at_b_kernel<<<grid_size_w1, block_size>>>(
-                input,
-                &d_d_x2,
-                &self.grad_weights1,
-                batch_size as i32,
-                INPUT_SIZE as i32,
-                HIDDEN_SIZE as i32
-            );
+        unsafe {
+            device()?.launch(
+                &runtime()?.kernel(matmul_at_b_kernel)?,
+                &[],
+                grid_size_w1,
+                block_size,
+                &[
+                    Argument::Buffer(&(input).as_buffer()),
+                    Argument::Buffer(&(&d_d_x2).as_buffer()),
+                    Argument::Buffer(&(&self.grad_weights1).as_buffer()),
+                    Argument::Scalar(Literal::I32(batch_size as i32)),
+                    Argument::Scalar(Literal::I32(INPUT_SIZE as i32)),
+                    Argument::Scalar(Literal::I32(HIDDEN_SIZE as i32)),
+                ],
+            )
         }?;
 
         // Manually accumulate bias gradients
         // For bias2
-        let bias_output_vec = grad_output.to_iter().collect::<Vec<_>>();
+        let bias_output_vec = grad_output.to_vec()?;
         let mut bias2_grad_vec = vec![0.0; OUTPUT_SIZE];
 
         for b in 0..batch_size {
@@ -536,7 +634,7 @@ impl NeuralNetwork {
         }
 
         // For bias1
-        let d_d_x2_vec = d_d_x2.to_iter().collect::<Vec<_>>();
+        let d_d_x2_vec = d_d_x2.to_vec()?;
         let mut bias1_grad_vec = vec![0.0; HIDDEN_SIZE];
 
         for b in 0..batch_size {
@@ -546,8 +644,8 @@ impl NeuralNetwork {
         }
 
         // Copy back to GPU
-        self.grad_bias1 = mimir_gpu_arr::from_iter(bias1_grad_vec)?;
-        self.grad_bias2 = mimir_gpu_arr::from_iter(bias2_grad_vec)?;
+        self.grad_bias1 = GpuArray::from_iter(bias1_grad_vec)?;
+        self.grad_bias2 = GpuArray::from_iter(bias2_grad_vec)?;
 
         Ok(())
     }
@@ -561,12 +659,18 @@ impl NeuralNetwork {
 
         let w1_grid = [w1_grid_size, 1, 1];
         let block = [block_size, 1, 1];
-        launch! {
-            update_weights_kernel<<<w1_grid, block>>>(
-                &mut self.weights1,
-                &self.grad_weights1,
-                w1_size as i32
-            );
+        unsafe {
+            device()?.launch(
+                &runtime()?.kernel(update_weights_kernel)?,
+                &[],
+                w1_grid,
+                block,
+                &[
+                    Argument::Buffer(&(&mut self.weights1).as_buffer()),
+                    Argument::Buffer(&(&self.grad_weights1).as_buffer()),
+                    Argument::Scalar(Literal::I32(w1_size as i32)),
+                ],
+            )
         }?;
 
         // Update weights2
@@ -575,12 +679,18 @@ impl NeuralNetwork {
 
         let w2_grid = [w2_grid_size, 1, 1];
         let block = [block_size, 1, 1];
-        launch! {
-            update_weights_kernel<<<w2_grid, block>>>(
-                &mut self.weights2,
-                &self.grad_weights2,
-                w2_size as i32
-            );
+        unsafe {
+            device()?.launch(
+                &runtime()?.kernel(update_weights_kernel)?,
+                &[],
+                w2_grid,
+                block,
+                &[
+                    Argument::Buffer(&(&mut self.weights2).as_buffer()),
+                    Argument::Buffer(&(&self.grad_weights2).as_buffer()),
+                    Argument::Scalar(Literal::I32(w2_size as i32)),
+                ],
+            )
         }?;
 
         // Update bias1
@@ -588,12 +698,18 @@ impl NeuralNetwork {
 
         let b1_grid = [b1_grid_size, 1, 1];
         let block = [block_size, 1, 1];
-        launch! {
-            update_weights_kernel<<<b1_grid, block>>>(
-                &mut self.bias1,
-                &self.grad_bias1,
-                HIDDEN_SIZE as i32
-            );
+        unsafe {
+            device()?.launch(
+                &runtime()?.kernel(update_weights_kernel)?,
+                &[],
+                b1_grid,
+                block,
+                &[
+                    Argument::Buffer(&(&mut self.bias1).as_buffer()),
+                    Argument::Buffer(&(&self.grad_bias1).as_buffer()),
+                    Argument::Scalar(Literal::I32(HIDDEN_SIZE as i32)),
+                ],
+            )
         }?;
 
         // Update bias2
@@ -601,12 +717,18 @@ impl NeuralNetwork {
 
         let b2_grid = [b2_grid_size, 1, 1];
         let block = [block_size, 1, 1];
-        launch! {
-            update_weights_kernel<<<b2_grid, block>>>(
-                &mut self.bias2,
-                &self.grad_bias2,
-                OUTPUT_SIZE as i32
-            );
+        unsafe {
+            device()?.launch(
+                &runtime()?.kernel(update_weights_kernel)?,
+                &[],
+                b2_grid,
+                block,
+                &[
+                    Argument::Buffer(&(&mut self.bias2).as_buffer()),
+                    Argument::Buffer(&(&self.grad_bias2).as_buffer()),
+                    Argument::Scalar(Literal::I32(OUTPUT_SIZE as i32)),
+                ],
+            )
         }?;
 
         Ok(())
@@ -656,15 +778,15 @@ fn evaluate_accuracy(
         }
 
         // Copy to GPU
-        let d_input = mimir_gpu_arr::from_iter(batch_x)?;
-        let mut d_hidden = mimir_gpu_arr::from_iter(vec![0.0; current_batch_size * HIDDEN_SIZE])?;
-        let mut d_output = mimir_gpu_arr::from_iter(vec![0.0; current_batch_size * OUTPUT_SIZE])?;
+        let d_input = GpuArray::from_iter(batch_x)?;
+        let mut d_hidden = GpuArray::from_iter(vec![0.0; current_batch_size * HIDDEN_SIZE])?;
+        let mut d_output = GpuArray::from_iter(vec![0.0; current_batch_size * OUTPUT_SIZE])?;
 
         // Forward pass
         nn.forward(&d_input, &mut d_hidden, &mut d_output, current_batch_size)?;
 
         // Copy output back to CPU for evaluation
-        let output = d_output.to_iter().collect::<Vec<_>>();
+        let output = d_output.to_vec()?;
 
         // Count correct predictions
         for i in 0..current_batch_size {
@@ -740,12 +862,10 @@ pub fn train_mnist() -> anyhow::Result<()> {
             //println!("end data normalization");
 
             // Copy to GPU
-            let d_input = mimir_gpu_arr::from_iter(batch_x.iter().cloned())?;
-            let d_labels = mimir_gpu_arr::from_iter(batch_y.iter().cloned())?;
-            let mut d_hidden =
-                mimir_gpu_arr::from_iter(vec![0.0; current_batch_size * HIDDEN_SIZE])?;
-            let mut d_output =
-                mimir_gpu_arr::from_iter(vec![0.0; current_batch_size * OUTPUT_SIZE])?;
+            let d_input = GpuArray::from_iter(batch_x.iter().cloned())?;
+            let d_labels = GpuArray::from_iter(batch_y.iter().cloned())?;
+            let mut d_hidden = GpuArray::from_iter(vec![0.0; current_batch_size * HIDDEN_SIZE])?;
+            let mut d_output = GpuArray::from_iter(vec![0.0; current_batch_size * OUTPUT_SIZE])?;
 
             // Forward pass
             //println!("Started forward pass");
@@ -753,7 +873,7 @@ pub fn train_mnist() -> anyhow::Result<()> {
             //println!("Finished forward pass");
 
             // Calculate loss
-            let output = d_output.to_iter().collect::<Vec<_>>();
+            let output = d_output.to_vec()?;
             let loss = cross_entropy_loss(&output, &batch_y, current_batch_size);
             total_loss += loss;
             batch_count += 1;

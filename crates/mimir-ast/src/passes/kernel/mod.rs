@@ -60,7 +60,7 @@ pub fn walk_stmt<P: KernelAstPass + ?Sized>(
     stmt: &mut RichKernelStmt,
 ) -> Result<(), P::Error> {
     match &mut stmt.stmt {
-        MimirKernelStmt::Let { value, .. } => {
+        MimirKernelStmt::Let { value, .. } | MimirKernelStmt::ReturnValue(value) => {
             pass.expr(value)?;
         }
         MimirKernelStmt::SharedMem { length, .. } => {
@@ -108,6 +108,11 @@ pub fn walk_expr<P: KernelAstPass + ?Sized>(
     expr: &mut RichMimirExpr,
 ) -> Result<(), P::Error> {
     match &mut expr.expr {
+        MimirExpr::Call { arguments, .. } => {
+            for arg in arguments {
+                pass.expr(arg)?;
+            }
+        }
         MimirExpr::BinOp(binary) => {
             pass.expr(&mut binary.lhs)?;
             pass.expr(&mut binary.rhs)?;

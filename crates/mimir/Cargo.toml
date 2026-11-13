@@ -6,3 +6,13 @@ license.workspace = true
 description.workspace = true
 
 [dependencies]
+mimir-runtime = { workspace = true, default-features = false }
+mimir-ir.workspace = true
+mimir-macros.workspace = true
+
+[features]
+default = ["vulkan"]
+vulkan = ["mimir-runtime/vulkan"]
+
+[dev-dependencies]
+mimir-codegen-spirv = { path = "../mimir-codegen-spirv" }

@@ -4,10 +4,9 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-mimir-macros = { path = "../../crates/mimir-macros" }
-mimir-omni-runtime = { path = "../../crates/mimir-omni-runtime" }
-anyhow = "1.0.98"
-rand = "0.9.1"
+anyhow = "1.0"
+rand = "0.10"
 mnist = "0.6.0"
 pretty_env_logger = "0.5.0"
-indicatif = "0.17.11"
+indicatif = "0.18"
+mimir = { path = "../../crates/mimir" }

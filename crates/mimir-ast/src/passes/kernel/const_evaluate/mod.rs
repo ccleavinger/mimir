@@ -1,7 +1,7 @@
 //! module defining const expression passes to group as many non-const expressions to const as possible
 use crate::{
-    ConstExpr, Expr, Intrinsic, KernelAstPass, MimirBinOpExpr, MimirExpr, MimirUnaryExpr,
-    RichConstExpr, RichMimirExpr,
+    ConstExpr, Intrinsic, KernelAstPass, MimirBinOpExpr, MimirExpr, MimirUnaryExpr, RichConstExpr,
+    RichMimirExpr,
 };
 
 pub struct ConstEvaluator;
@@ -72,6 +72,7 @@ impl KernelAstPass for ConstEvaluator {
                 RichConstExpr::new(ConstExpr::Literal(*literal), expr.span.clone())
                     .set_p(expr.is_parenthesized),
             )),
+            crate::MimirExpr::Call { .. } => Ok(None),
             crate::MimirExpr::Var(_) => Ok(None),
             crate::MimirExpr::Index { .. } => Ok(None),
             crate::MimirExpr::Builtin { .. } => Ok(None),

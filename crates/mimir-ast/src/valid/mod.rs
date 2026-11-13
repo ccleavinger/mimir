@@ -11,6 +11,9 @@ pub struct ValidationError {
 #[derive(Debug, Clone)]
 pub struct ValidatedKernel(MimirKernelAst);
 impl ValidatedKernel {
+    pub(crate) fn from_function(ast: MimirKernelAst) -> Self {
+        Self(ast)
+    }
     pub fn ast(&self) -> &MimirKernelAst {
         &self.0
     }
@@ -32,3 +35,30 @@ impl std::fmt::Display for ValidationError {
     }
 }
 impl std::error::Error for ValidationError {}
+
+/// A reusable lexical device function AST, with an explicit scalar result.
+#[derive(Debug, Clone)]
+pub struct MimirFunctionAst {
+    pub routine: MimirKernelAst,
+    pub returns: crate::PrimitiveTy,
+}
+#[derive(Debug, Clone)]
+pub struct ValidatedFunction(MimirFunctionAst);
+impl MimirFunctionAst {
+    pub fn validate(mut self) -> Result<ValidatedFunction, ValidationError> {
+        ValidityPass::default().function(&mut self.routine, self.returns)?;
+        Ok(ValidatedFunction(self))
+    }
+}
+impl ValidatedFunction {
+    pub fn ast(&self) -> &MimirFunctionAst {
+        &self.0
+    }
+    pub fn into_ast(self) -> MimirFunctionAst {
+        self.0
+    }
+    /// Calls are resolved when the containing IR module is validated.
+    pub fn to_ir(&self, id: u32) -> Result<mimir_ir::flat::DeviceFunction, crate::LoweringError> {
+        crate::lower_function(self.0.routine.clone(), id, self.0.returns)
+    }
+}

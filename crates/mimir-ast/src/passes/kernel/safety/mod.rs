@@ -28,9 +28,19 @@ pub struct ValidityPass {
     vars: BTreeMap<LocalId, (Ty, Mutability)>,
     seen: BTreeSet<LocalId>,
     generics: usize,
+    returns: Option<PrimitiveTy>,
 }
 
 impl ValidityPass {
+    pub(crate) fn function(
+        &mut self,
+        kernel: &mut MimirKernelAst,
+        returns: PrimitiveTy,
+    ) -> Check<()> {
+        *self = Self::default();
+        self.returns = Some(returns);
+        self.check_kernel(kernel)
+    }
     fn bind(&mut self, id: LocalId, ty: Ty, access: Mutability, span: &Span) -> Check<()> {
         if !self.seen.insert(id) {
             return Err(error(span.clone(), "duplicate binding id"));
@@ -208,13 +218,64 @@ impl KernelAstPass for ValidityPass {
                 }
             }
             MimirKernelStmt::Block(body) => self.block(body)?,
-            MimirKernelStmt::Return | MimirKernelStmt::Syncthreads => {}
+            MimirKernelStmt::ReturnValue(value) => {
+                let ty = self.expr(value)?;
+                require(self.returns == Some(ty), span, "return type mismatch")?;
+            }
+            MimirKernelStmt::Return => {
+                require(
+                    self.returns.is_none(),
+                    span,
+                    "device function must return a value",
+                )?;
+            }
+            MimirKernelStmt::Syncthreads => {}
         }
         Ok(())
     }
     fn expr(&mut self, e: &mut RichMimirExpr) -> Check<PrimitiveTy> {
         let span = &e.span;
         match &mut e.expr {
+            MimirExpr::Call {
+                arguments,
+                parameters,
+                returns,
+                ..
+            } => {
+                require(
+                    arguments.len() == parameters.len(),
+                    span,
+                    "device argument count mismatch",
+                )?;
+                for (arg, parameter) in arguments.iter_mut().zip(parameters.iter()) {
+                    match parameter {
+                        KernelParamTy::Scalar(t) => {
+                            require(
+                                self.expr(arg)? == *t,
+                                &arg.span,
+                                "device argument type mismatch",
+                            )?;
+                        }
+                        KernelParamTy::Buffer { element, access } => {
+                            let MimirExpr::Var(id) = arg.expr else {
+                                return Err(error(arg.span.clone(), "expected buffer argument"));
+                            };
+                            let (ty, actual) = self.lookup(id, &arg.span)?;
+                            require(
+                                ty == Ty::Array(*element),
+                                &arg.span,
+                                "buffer element mismatch",
+                            )?;
+                            require(
+                                *access != Mutability::Mutable || actual == Mutability::Mutable,
+                                &arg.span,
+                                "cannot promote buffer permissions",
+                            )?;
+                        }
+                    }
+                }
+                Ok(*returns)
+            }
             MimirExpr::Literal(l) => Ok(l.ty()),
             MimirExpr::Var(id) => match self.lookup(*id, span)?.0 {
                 Ty::Scalar(t) => Ok(t),

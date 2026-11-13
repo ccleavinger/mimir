@@ -1,0 +1,7 @@
+[package]
+name = "mimir-linked-fixture"
+version = "0.0.0"
+edition = "2024"
+publish = false
+[dependencies]
+mimir = { path = "../../crates/mimir", default-features = false }

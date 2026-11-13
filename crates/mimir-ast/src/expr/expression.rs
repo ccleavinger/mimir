@@ -5,6 +5,12 @@ use crate::{
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MimirExpr {
+    Call {
+        function: u32,
+        arguments: Vec<RichMimirExpr>,
+        parameters: Vec<crate::KernelParamTy>,
+        returns: PrimitiveTy,
+    },
     BinOp(MimirBinOpExpr<RichMimirExpr>),
     Unary(MimirUnaryExpr<RichMimirExpr>),
     Literal(Literal),
@@ -30,6 +36,7 @@ pub type RichMimirExpr = RichExpr<MimirExpr>;
 impl Expr for MimirExpr {
     fn priority(&self) -> u32 {
         match self {
+            Self::Call { .. } => 1 << 3,
             Self::BinOp(e) => e.op.priority(),
             Self::Unary(_) => 1 << 5,
             Self::Index { .. } | Self::MathIntrinsic(_) => 1 << 3,

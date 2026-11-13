@@ -47,6 +47,7 @@ pub enum MimirKernelStmt {
     },
     Block(MimirKernelBlock),
     Return,
+    ReturnValue(RichMimirExpr),
     Syncthreads,
 }
 

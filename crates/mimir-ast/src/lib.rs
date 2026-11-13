@@ -1,7 +1,6 @@
 //! Rust-oriented kernel AST. Lexical declarations own local scope; validation
 //! checks names, types and mutability before subsequent compiler stages.
 mod expr;
-mod func;
 mod kernel;
 mod op;
 pub mod passes;
@@ -17,3 +16,8 @@ pub use passes::kernel::KernelAstPass;
 pub use ty::*;
 pub use util::LocalId;
 pub use valid::{ValidatedKernel, ValidationError};
+
+pub use to_ir::LoweringError;
+
+pub use to_ir::lower_function;
+pub use valid::{MimirFunctionAst, ValidatedFunction};

@@ -3,11 +3,20 @@ name = "mimir-runtime"
 version = "0.1.0"
 edition = "2024"
 authors = ["Caleb Cleavinger caleb.cleavinger@gmail.com"]
-description = "Runtime traits for the Mimir GPU programming framework"
+description = "Unified platform-aware runtime for Mimir"
 license = "MIT or Apache-2.0"
 repository = "https://github.com/ccleavinger/mimir/tree/master/crates/mimir-runtime"
 
 [dependencies]
 mimir-ir = { path = "../mimir-ir" }
-serde = "1.0.226"
 thiserror = "2.0.16"
+
+linkme = "0.3.36"
+
+[features]
+default = ["vulkan"]
+vulkan = ["dep:ash", "dep:mimir-codegen-spirv"]
+
+[target.'cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))'.dependencies]
+ash = { workspace = true, optional = true }
+mimir-codegen-spirv = { path = "../mimir-codegen-spirv", optional = true }
