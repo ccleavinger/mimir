@@ -5,9 +5,12 @@ edition = "2021"
 license.workspace = true
 description.workspace = true
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[features]
+default = ["vulkan"]
+vulkan = ["mimir/vulkan"]
+cuda = ["mimir/cuda"]
 
 [dependencies]
 rand = "0.9.1"
 
-mimir = { path = "../../crates/mimir" }
+mimir = { path = "../../crates/mimir", default-features = false }

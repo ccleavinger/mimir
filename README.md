@@ -191,6 +191,10 @@ Unified discovery reports each confidently identified physical GPU through its
 highest-priority backend: CUDA reports `200`, Vulkan `100`, and larger `usize`
 priorities win. Ties retain the first discovered implementation. Replacement
 preserves physical discovery order rather than sorting unrelated GPUs by priority.
+Discovery attempts every enabled backend even if another backend fails to initialize.
+Usable devices are returned despite failures elsewhere. If no backend finds a device,
+any backend failures are reported together; an empty list is returned when discovery
+completes without errors but finds no devices.
 UUIDs, Windows adapter/node IDs and full PCI domain/bus/device/function addresses
 supply strong matches; conflicting identifiers prevent merging. A normalized model
 name and total memory within 5% provide a fallback only when the correspondence is
@@ -279,7 +283,12 @@ cargo test -p mimir --test launch -- --ignored
 cargo test -p mimir --test default_runtime -- --ignored
 cargo test -p mimir --test array -- --ignored
 cargo run -p matmul
+# CUDA only (including Jetson):
+cargo run -p matmul --release --no-default-features --features cuda
 ```
+
+The matmul example defaults to Vulkan. Its `cuda` and `vulkan` features select
+backends; use `--no-default-features --features cuda` to avoid Vulkan initialization.
 
 The ignored test requires a Vulkan compute device. Shader tests invoke
 `spirv-val --target-env vulkan1.1` when installed. Matrix multiplication checks

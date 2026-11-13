@@ -63,12 +63,25 @@ impl Device {
     /// Discover and resolve duplicate hardware from an explicit set of providers.
     /// Each physical device is represented by its highest-priority backend.
     /// Ambiguous identities are retained rather than hiding distinct devices.
+    /// All providers are attempted. Discovery failures are returned together only
+    /// when no provider discovers a device; otherwise usable devices are retained.
+    /// No devices and no failures yields an empty list.
     pub fn discover_with_backends(
         backends: &[&dyn mimir_runtime_core::Backend],
     ) -> ExecutionResult<Vec<Self>> {
         let mut devices = Vec::new();
+        let mut failures = Vec::new();
         for backend in backends {
-            devices.extend(backend.discover()?.into_iter().map(Self::from_backend));
+            match backend.discover() {
+                Ok(found) => devices.extend(found.into_iter().map(Self::from_backend)),
+                Err(error) => failures.push(format!("{}: {error}", backend.name())),
+            }
+        }
+        if devices.is_empty() && !failures.is_empty() {
+            return Err(ExecutionError(format!(
+                "no compute device could be discovered; backend failures: {}",
+                failures.join("; ")
+            )));
         }
         Ok(crate::discovery::select(devices))
     }

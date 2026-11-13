@@ -46,6 +46,53 @@ impl DeviceBackend for Gpu {
     }
 }
 struct Provider(Vec<Arc<dyn DeviceBackend>>);
+struct FailingProvider(&'static str);
+impl Backend for FailingProvider {
+    fn name(&self) -> &'static str {
+        self.0
+    }
+    fn discover(&self) -> ExecutionResult<Vec<Arc<dyn DeviceBackend>>> {
+        Err(ExecutionError(format!("{} initialization failed", self.0)))
+    }
+}
+
+#[test]
+fn failed_backends_do_not_prevent_discovery_in_either_order() {
+    let working = Provider(vec![gpu("cuda", 200, uuid(1))]);
+    let broken = FailingProvider("vulkan");
+    for backends in [
+        [&broken as &dyn Backend, &working as &dyn Backend],
+        [&working as &dyn Backend, &broken as &dyn Backend],
+    ] {
+        let devices = Device::discover_with_backends(&backends).unwrap();
+        assert_eq!(devices.len(), 1);
+        assert_eq!(devices[0].backend_name(), "cuda");
+    }
+}
+
+#[test]
+fn discovery_reports_every_failure_when_no_device_is_available() {
+    let error = Device::discover_with_backends(&[
+        &FailingProvider("vulkan"),
+        &Provider(vec![]),
+        &FailingProvider("cuda"),
+    ])
+    .err()
+    .expect("failures must be reported when no device is usable")
+    .to_string();
+    assert!(error.contains("vulkan initialization failed"), "{error}");
+    assert!(error.contains("cuda initialization failed"), "{error}");
+}
+
+#[test]
+fn successful_empty_discovery_remains_empty() {
+    assert!(
+        Device::discover_with_backends(&[&Provider(vec![])])
+            .unwrap()
+            .is_empty()
+    );
+}
+
 impl Backend for Provider {
     fn name(&self) -> &'static str {
         "test"
