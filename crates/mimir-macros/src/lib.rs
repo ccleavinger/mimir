@@ -1,13 +1,38 @@
 //! Compile Rust kernels into embedded, versioned flat IR artifacts.
+use mimir_rs_compiler::SourceFunction;
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::{ItemFn, parse_macro_input};
+use syn::parse_macro_input;
+struct SourceModule {
+    vis: syn::Visibility,
+    ident: syn::Ident,
+    functions: Vec<SourceFunction>,
+}
+impl syn::parse::Parse for SourceModule {
+    fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
+        let _attrs = input.call(syn::Attribute::parse_outer)?;
+        let vis = input.parse()?;
+        input.parse::<syn::Token![mod]>()?;
+        let ident = input.parse()?;
+        let content;
+        syn::braced!(content in input);
+        let mut functions = vec![];
+        while !content.is_empty() {
+            functions.push(content.parse()?)
+        }
+        Ok(Self {
+            vis,
+            ident,
+            functions,
+        })
+    }
+}
 
 #[proc_macro_attribute]
 pub fn mimir_global(_attr: TokenStream, item: TokenStream) -> TokenStream {
-    let input = parse_macro_input!(item as ItemFn);
+    let input = parse_macro_input!(item as SourceFunction);
     let result = (|| {
-        let ast = mimir_rs_compiler::frontend::parse_kernel(&input)?;
+        let ast = mimir_rs_compiler::frontend::parse_kernel_source(&input)?;
         let validated = ast
             .validate()
             .map_err(|e| syn::Error::new(input.sig.ident.span(), e.to_string()))?;
@@ -45,19 +70,10 @@ pub fn mimir_global(_attr: TokenStream, item: TokenStream) -> TokenStream {
 /// `#[device]`; helper calls are resolved and validated as one flat module.
 #[proc_macro_attribute]
 pub fn mimir_module(_attr: TokenStream, item: TokenStream) -> TokenStream {
-    let input = parse_macro_input!(item as syn::ItemMod);
+    let input = parse_macro_input!(item as SourceModule);
     let result = (|| -> syn::Result<proc_macro2::TokenStream> {
-        let (_, items) = input
-            .content
-            .ok_or_else(|| syn::Error::new(input.ident.span(), "GPU modules must be inline"))?;
         let mut functions = vec![];
-        for item in items {
-            let syn::Item::Fn(mut f) = item else {
-                return Err(syn::Error::new_spanned(
-                    item,
-                    "GPU modules contain only kernels and device functions",
-                ));
-            };
+        for mut f in input.functions {
             let kernel = f.attrs.iter().any(|a| a.path().is_ident("kernel"));
             let device = f.attrs.iter().any(|a| a.path().is_ident("device"));
             if kernel == device {
@@ -69,7 +85,7 @@ pub fn mimir_module(_attr: TokenStream, item: TokenStream) -> TokenStream {
             f.attrs.clear();
             functions.push((f, kernel));
         }
-        let module = mimir_rs_compiler::frontend::compile_module(&functions)?;
+        let module = mimir_rs_compiler::frontend::compile_module_sources(&functions)?;
         let bytes = module
             .to_bytes()
             .map_err(|e| syn::Error::new(input.ident.span(), e.to_string()))?;

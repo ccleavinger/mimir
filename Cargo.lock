@@ -465,12 +465,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "mimir-codegen-ptx"
+version = "0.1.0"
+dependencies = [
+ "mimir-ir",
+ "thiserror",
+]
+
+[[package]]
 name = "mimir-codegen-spirv"
 version = "0.1.0"
 dependencies = [
  "mimir-ir",
  "rspirv",
  "thiserror",
+]
+
+[[package]]
+name = "mimir-cuda-runtime"
+version = "0.1.0"
+dependencies = [
+ "libloading",
+ "mimir-codegen-ptx",
+ "mimir-ir",
+ "mimir-runtime-core",
 ]
 
 [[package]]
@@ -507,9 +525,11 @@ dependencies = [
 name = "mimir-rs-compiler"
 version = "0.1.0"
 dependencies = [
+ "chumsky",
  "mimir-ast",
  "mimir-ir",
  "proc-macro2",
+ "quote",
  "syn 2.0.114",
 ]
 
@@ -517,11 +537,30 @@ dependencies = [
 name = "mimir-runtime"
 version = "0.1.0"
 dependencies = [
- "ash",
  "linkme",
- "mimir-codegen-spirv",
+ "mimir-cuda-runtime",
+ "mimir-ir",
+ "mimir-runtime-core",
+ "mimir-vulkan-runtime",
+ "thiserror",
+]
+
+[[package]]
+name = "mimir-runtime-core"
+version = "0.1.0"
+dependencies = [
  "mimir-ir",
  "thiserror",
+]
+
+[[package]]
+name = "mimir-vulkan-runtime"
+version = "0.1.0"
+dependencies = [
+ "ash",
+ "mimir-codegen-spirv",
+ "mimir-ir",
+ "mimir-runtime-core",
 ]
 
 [[package]]

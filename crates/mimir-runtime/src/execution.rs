@@ -1,153 +1,116 @@
-#![allow(unused_variables, unused_imports)]
 use crate::KernelHandle;
 use mimir_ir::flat::{Literal, ScalarType};
+use mimir_runtime_core::{
+    BufferBackend, DeviceBackend, Launch, validate_buffer_owner, validate_buffer_values,
+};
+pub use mimir_runtime_core::{
+    DeviceLuid, ExecutionError, ExecutionResult, GpuScalar, HardwareInfo, PciAddress,
+};
 use std::sync::Arc;
 
-#[derive(Debug, thiserror::Error)]
-#[error("Mimir execution: {0}")]
-pub struct ExecutionError(pub String);
-pub type ExecutionResult<T> = Result<T, ExecutionError>;
-
-#[cfg(all(
-    feature = "vulkan",
-    any(target_os = "linux", target_os = "android", target_os = "windows")
-))]
-use crate::vulkan::VulkanDevice;
-// Compile-time backend variants keep selection in one runtime without loading
-// backend plugins or shipping disabled implementations.
-#[derive(Clone)]
-pub(crate) enum DeviceBackend {
-    #[cfg(all(
-        feature = "vulkan",
-        any(target_os = "linux", target_os = "android", target_os = "windows")
-    ))]
-    Vulkan(Arc<VulkanDevice>),
-}
-#[derive(Clone)]
-pub(crate) enum BufferBackend {
-    #[cfg(all(
-        feature = "vulkan",
-        any(target_os = "linux", target_os = "android", target_os = "windows")
-    ))]
-    Vulkan(Arc<crate::vulkan::VulkanBuffer>),
-}
+/// A shared backend device context.
 #[derive(Clone)]
 pub struct Device {
-    pub(crate) inner: DeviceBackend,
+    inner: Arc<dyn DeviceBackend>,
 }
+/// A shared backend allocation, retaining its owning context.
 #[derive(Clone)]
 pub struct Buffer {
-    pub(crate) element: ScalarType,
-    pub(crate) length: usize,
-    pub(crate) inner: BufferBackend,
-}
-#[cfg(all(
-    feature = "vulkan",
-    any(target_os = "linux", target_os = "android", target_os = "windows")
-))]
-impl Buffer {
-    pub(crate) fn vulkan(&self) -> &Arc<crate::vulkan::VulkanBuffer> {
-        match &self.inner {
-            BufferBackend::Vulkan(buffer) => buffer,
-        }
-    }
+    inner: Arc<dyn BufferBackend>,
 }
 pub enum Argument<'a> {
     Scalar(Literal),
     Buffer(&'a Buffer),
 }
 impl Buffer {
-    /// Return a handle to the device retaining this allocation.
     pub fn device(&self) -> Device {
-        match self.inner {
+        Device::from_backend(self.inner.device())
+    }
+    pub fn len(&self) -> usize {
+        self.inner.len()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.inner.is_empty()
+    }
+    pub fn element_type(&self) -> ScalarType {
+        self.inner.element_type()
+    }
+}
+impl Device {
+    /// Integrate an independently supplied backend context without rediscovery
+    /// or automatic duplicate selection.
+    pub fn from_backend(backend: Arc<dyn DeviceBackend>) -> Self {
+        Self { inner: backend }
+    }
+    /// Discover enabled backends, retaining the preferred implementation of
+    /// confidently matched duplicate hardware.
+    pub fn discover() -> ExecutionResult<Vec<Self>> {
+        let backends: &[&dyn mimir_runtime_core::Backend] = &[
             #[cfg(all(
                 feature = "vulkan",
                 any(target_os = "linux", target_os = "android", target_os = "windows")
             ))]
-            BufferBackend::Vulkan(ref buffer) => Device {
-                inner: DeviceBackend::Vulkan(buffer.owner()),
-            },
-        }
+            &mimir_vulkan_runtime::VulkanBackend,
+            #[cfg(all(
+                feature = "cuda",
+                any(target_os = "linux", target_os = "windows"),
+                target_pointer_width = "64"
+            ))]
+            &mimir_cuda_runtime::CudaBackend,
+        ];
+        Self::discover_with_backends(backends)
     }
-    pub fn len(&self) -> usize {
-        let _ = &self.inner;
-        self.length
-    }
-    pub fn is_empty(&self) -> bool {
-        self.length == 0
-    }
-    pub fn element_type(&self) -> ScalarType {
-        self.element
-    }
-}
-impl Device {
-    pub fn discover() -> ExecutionResult<Vec<Self>> {
-        #[allow(unused_mut)]
+    /// Discover and resolve duplicate hardware from an explicit set of providers.
+    /// Each physical device is represented by its highest-priority backend.
+    /// Ambiguous identities are retained rather than hiding distinct devices.
+    pub fn discover_with_backends(
+        backends: &[&dyn mimir_runtime_core::Backend],
+    ) -> ExecutionResult<Vec<Self>> {
         let mut devices = Vec::new();
-        #[cfg(all(
-            feature = "vulkan",
-            any(target_os = "linux", target_os = "android", target_os = "windows")
-        ))]
-        {
-            devices.extend(crate::vulkan::discover()?);
+        for backend in backends {
+            devices.extend(backend.discover()?.into_iter().map(Self::from_backend));
         }
-        Ok(devices)
+        Ok(crate::discovery::select(devices))
+    }
+    pub fn priority(&self) -> usize {
+        self.inner.priority()
+    }
+    pub fn hardware_info(&self) -> mimir_runtime_core::HardwareInfo {
+        self.inner.hardware_info()
     }
     pub fn name(&self) -> &str {
-        let _ = &self.inner;
-        #[cfg(all(
-            feature = "vulkan",
-            any(target_os = "linux", target_os = "android", target_os = "windows")
-        ))]
-        {
-            return match &self.inner {
-                DeviceBackend::Vulkan(device) => &device.name,
-            };
-        }
-        #[allow(unreachable_code)]
-        "unavailable"
+        self.inner.name()
+    }
+    pub fn backend_name(&self) -> &'static str {
+        self.inner.backend_name()
     }
     pub fn buffer(&self, element: ScalarType, values: &[u32]) -> ExecutionResult<Buffer> {
-        if values.is_empty() {
-            return Err(ExecutionError("buffers must have positive length".into()));
-        }
-        if element == ScalarType::Bool && values.iter().any(|v| *v > 1) {
+        validate_buffer_values(element, values)?;
+        let inner = self.inner.clone().buffer(element, values)?;
+        validate_buffer_owner(self.inner.as_ref(), inner.as_ref())?;
+        if inner.element_type() != element || inner.len() != values.len() {
             return Err(ExecutionError(
-                "boolean memory slots must contain 0 or 1".into(),
+                "backend returned incorrect buffer metadata".into(),
             ));
         }
-        #[cfg(all(
-            feature = "vulkan",
-            any(target_os = "linux", target_os = "android", target_os = "windows")
-        ))]
-        {
-            return match &self.inner {
-                DeviceBackend::Vulkan(device) => device.buffer(element, values),
-            };
-        }
-        #[allow(unreachable_code)]
-        Err(ExecutionError("no backend enabled".into()))
+        Ok(Buffer { inner })
     }
     pub fn read(&self, buffer: &Buffer) -> ExecutionResult<Vec<u32>> {
-        #[cfg(all(
-            feature = "vulkan",
-            any(target_os = "linux", target_os = "android", target_os = "windows")
-        ))]
-        {
-            return match &self.inner {
-                DeviceBackend::Vulkan(device) => device.read(buffer),
-            };
+        validate_buffer_owner(self.inner.as_ref(), buffer.inner.as_ref())?;
+        let values = self.inner.read(buffer.inner.as_ref())?;
+        if values.len() != buffer.len() {
+            return Err(ExecutionError(
+                "backend returned incorrect readback length".into(),
+            ));
         }
-        #[allow(unreachable_code)]
-        Err(ExecutionError("no backend enabled".into()))
+        validate_buffer_values(buffer.element_type(), &values)?;
+        Ok(values)
     }
     /// Submit a synchronous compute launch.
     ///
     /// # Safety
-    /// The caller must ensure all accesses are in bounds, barriers are uniform,
-    /// and the kernel satisfies the IR's execution preconditions (including
-    /// arithmetic validity and absence of data races). Structural validation
-    /// does not establish these properties.
+    /// The caller must ensure bounds, uniform barriers, valid arithmetic and
+    /// absence of data races, including all IR execution preconditions.
     pub unsafe fn launch(
         &self,
         kernel: &KernelHandle,
@@ -156,19 +119,22 @@ impl Device {
         workgroup: [u32; 3],
         args: &[Argument<'_>],
     ) -> ExecutionResult<()> {
-        #[cfg(all(
-            feature = "vulkan",
-            any(target_os = "linux", target_os = "android", target_os = "windows")
-        ))]
-        {
-            return match &self.inner {
-                DeviceBackend::Vulkan(device) => {
-                    device.launch(kernel, tuning, grid, workgroup, args)
-                }
-            };
-        }
-        #[allow(unreachable_code)]
-        Err(ExecutionError("no backend enabled".into()))
+        let arguments: Vec<_> = args
+            .iter()
+            .map(|a| match a {
+                Argument::Scalar(v) => mimir_runtime_core::Argument::Scalar(*v),
+                Argument::Buffer(b) => mimir_runtime_core::Argument::Buffer(b.inner.as_ref()),
+            })
+            .collect();
+        let launch = Launch::new(
+            self.inner.as_ref(),
+            kernel,
+            tuning,
+            grid,
+            workgroup,
+            &arguments,
+        )?;
+        unsafe { self.inner.launch(&launch) }
     }
 }
 impl crate::Runtime {
@@ -180,55 +146,6 @@ impl crate::Runtime {
     }
 }
 
-mod sealed {
-    pub trait Sealed {}
-    impl Sealed for u32 {}
-    impl Sealed for i32 {}
-    impl Sealed for f32 {}
-    impl Sealed for bool {}
-}
-/// Values with the IR's four-byte storage representation.
-pub trait GpuScalar: sealed::Sealed + Copy {
-    const TYPE: ScalarType;
-    fn to_word(self) -> u32;
-    fn from_word(word: u32) -> Self;
-}
-impl GpuScalar for u32 {
-    const TYPE: ScalarType = ScalarType::U32;
-    fn to_word(self) -> u32 {
-        self
-    }
-    fn from_word(v: u32) -> Self {
-        v
-    }
-}
-impl GpuScalar for i32 {
-    const TYPE: ScalarType = ScalarType::I32;
-    fn to_word(self) -> u32 {
-        self as u32
-    }
-    fn from_word(v: u32) -> Self {
-        v as i32
-    }
-}
-impl GpuScalar for f32 {
-    const TYPE: ScalarType = ScalarType::F32;
-    fn to_word(self) -> u32 {
-        self.to_bits()
-    }
-    fn from_word(v: u32) -> Self {
-        Self::from_bits(v)
-    }
-}
-impl GpuScalar for bool {
-    const TYPE: ScalarType = ScalarType::Bool;
-    fn to_word(self) -> u32 {
-        u32::from(self)
-    }
-    fn from_word(v: u32) -> Self {
-        v != 0
-    }
-}
 impl Device {
     pub fn buffer_from_slice<T: GpuScalar>(&self, values: &[T]) -> ExecutionResult<Buffer> {
         self.buffer(
@@ -237,7 +154,7 @@ impl Device {
         )
     }
     pub fn read_typed<T: GpuScalar>(&self, buffer: &Buffer) -> ExecutionResult<Vec<T>> {
-        if buffer.element != T::TYPE {
+        if buffer.element_type() != T::TYPE {
             return Err(ExecutionError(
                 "read element type does not match buffer".into(),
             ));

@@ -11,6 +11,9 @@ mimir-ast = { path = "crates/mimir-ast" }
 mimir-ir = { path = "crates/mimir-ir" }
 mimir-macros = { path = "crates/mimir-macros" }
 mimir-rs-compiler = { path = "crates/mimir-rs-compiler" }
+mimir-runtime-core = { path = "crates/mimir-runtime-core" }
+mimir-cuda-runtime = { path = "crates/mimir-cuda-runtime" }
+mimir-vulkan-runtime = { path = "crates/mimir-vulkan-runtime" }
 mimir-runtime = { path = "crates/mimir-runtime", default-features = false }
 
 # external crates

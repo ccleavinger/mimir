@@ -2,6 +2,7 @@
 use crate::{CompileError, Result};
 use mimir_ir::flat::*;
 use std::collections::BTreeMap;
+
 struct Inliner<'a> {
     module: &'a ValidatedModule,
     spec: &'a SpecializedKernel,
@@ -10,6 +11,7 @@ struct Inliner<'a> {
     value: u32,
     storage: u32,
 }
+
 impl Inliner<'_> {
     fn value(&mut self, t: Type) -> ValueId {
         let id = ValueId(self.value);
@@ -17,6 +19,7 @@ impl Inliner<'_> {
         self.header.variables.push(Variable::Value { id, ty: t });
         id
     }
+
     fn block(&mut self) -> BlockId {
         let id = BlockId(self.blocks.len() as u32);
         self.blocks.push(Block {
@@ -28,6 +31,7 @@ impl Inliner<'_> {
         });
         id
     }
+
     fn routine(
         &mut self,
         r: &Routine,
@@ -42,6 +46,7 @@ impl Inliner<'_> {
             .zip(args)
             .map(|(p, a)| (p.id, *a))
             .collect::<BTreeMap<_, _>>();
+
         let mut values = BTreeMap::new();
         let mut storage = BTreeMap::new();
         let mut blocks = BTreeMap::new();
@@ -67,10 +72,12 @@ impl Inliner<'_> {
                 }
             }
         }
+
         for b in &r.body.blocks {
             let new = self.block();
             blocks.insert(b.id, new);
         }
+
         let operand = |o: Operand| match o {
             Operand::Parameter(id) => params[&id],
             Operand::Constant(id) => Operand::Literal(Literal::U32(s.constants[&id])),
@@ -78,10 +85,12 @@ impl Inliner<'_> {
             Operand::Storage(id) => Operand::Storage(storage[&id]),
             o => o,
         };
+
         let edge = |e: &Edge| Edge {
             target: blocks[&e.target],
             arguments: e.arguments.iter().map(|a| operand(*a)).collect(),
         };
+
         for b in &r.body.blocks {
             let mut current = blocks[&b.id];
             self.blocks[current.0 as usize].arguments =
@@ -206,6 +215,7 @@ impl Inliner<'_> {
                     self.blocks[current.0 as usize].instructions.push(mapped);
                 }
             }
+
             let dst = &mut self.blocks[current.0 as usize];
             dst.merge = b.merge.map(|m| match m {
                 Merge::Selection { merge } => Merge::Selection {
@@ -216,6 +226,7 @@ impl Inliner<'_> {
                     continuing: blocks[&continuing],
                 },
             });
+
             dst.terminator = match &b.terminator {
                 Terminator::Branch(e) => Terminator::Branch(edge(e)),
                 Terminator::Conditional {
@@ -240,9 +251,11 @@ impl Inliner<'_> {
                 Terminator::Unreachable => Terminator::Unreachable,
             };
         }
+
         Ok(blocks[&r.body.entry])
     }
 }
+
 pub fn inline(module: &ValidatedModule, spec: &SpecializedKernel) -> Result<ValidatedModule> {
     let kernel = &module.module().kernels[spec.kernel_index];
     let mut i = Inliner {
@@ -254,6 +267,7 @@ pub fn inline(module: &ValidatedModule, spec: &SpecializedKernel) -> Result<Vali
         storage: 0,
     };
     i.header.parameters = kernel.routine.header.parameters.clone();
+
     let args = kernel
         .routine
         .header
@@ -261,12 +275,15 @@ pub fn inline(module: &ValidatedModule, spec: &SpecializedKernel) -> Result<Vali
         .iter()
         .map(|p| Operand::Parameter(p.id))
         .collect::<Vec<_>>();
+
     let target = i.routine(&kernel.routine, &spec.kernel, &args, None)?;
     let entry = i.block();
+
     i.blocks[entry.0 as usize].terminator = Terminator::Branch(Edge {
         target,
         arguments: vec![],
     });
+
     Module {
         kernels: vec![Kernel {
             routine: Routine {

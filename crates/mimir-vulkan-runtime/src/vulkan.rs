@@ -1,33 +1,43 @@
-use crate::execution::{BufferBackend, DeviceBackend};
-use crate::{Argument, Buffer, Device, ExecutionError, ExecutionResult, KernelHandle};
 use ash::{Entry, vk};
 use mimir_ir::flat::*;
+use mimir_runtime_core::{
+    Argument, BufferBackend, DeviceBackend, DeviceId, DeviceLuid, ExecutionError, ExecutionResult,
+    HardwareInfo, Launch, PciAddress, validate_buffer_owner, validate_buffer_values,
+};
 use std::{
     collections::HashMap,
     ffi::{CStr, CString},
     sync::{Arc, Mutex},
 };
+
 fn err(e: impl std::fmt::Display) -> ExecutionError {
     ExecutionError(e.to_string())
 }
+
 struct Instance {
     _entry: Entry,
     raw: ash::Instance,
 }
+
 impl Drop for Instance {
     fn drop(&mut self) {
         unsafe { self.raw.destroy_instance(None) }
     }
 }
+
 struct Pipeline {
     pipeline: vk::Pipeline,
     layout: vk::PipelineLayout,
     descriptor: vk::DescriptorSetLayout,
 }
+
 struct State {
     pipelines: HashMap<VariantKey, Pipeline>,
 }
-pub(crate) struct VulkanDevice {
+
+pub struct VulkanDevice {
+    id: DeviceId,
+    hardware: HardwareInfo,
     instance: Arc<Instance>,
     physical: vk::PhysicalDevice,
     raw: ash::Device,
@@ -37,6 +47,7 @@ pub(crate) struct VulkanDevice {
     properties: vk::PhysicalDeviceProperties,
     state: Mutex<State>,
 }
+
 impl Drop for VulkanDevice {
     fn drop(&mut self) {
         unsafe {
@@ -50,17 +61,15 @@ impl Drop for VulkanDevice {
         }
     }
 }
-pub(crate) struct VulkanBuffer {
+pub struct VulkanBuffer {
+    element: ScalarType,
+    length: usize,
     device: Arc<VulkanDevice>,
     buffer: vk::Buffer,
     memory: vk::DeviceMemory,
     bytes: u64,
 }
-impl VulkanBuffer {
-    pub(crate) fn owner(&self) -> Arc<VulkanDevice> {
-        self.device.clone()
-    }
-}
+
 impl Drop for VulkanBuffer {
     fn drop(&mut self) {
         unsafe {
@@ -69,7 +78,8 @@ impl Drop for VulkanBuffer {
         }
     }
 }
-pub(crate) fn discover() -> ExecutionResult<Vec<Device>> {
+
+pub(crate) fn discover() -> ExecutionResult<Vec<Arc<dyn DeviceBackend>>> {
     unsafe {
         let entry = Entry::load().map_err(err)?;
         let name = CString::new("Mimir").unwrap();
@@ -83,12 +93,13 @@ pub(crate) fn discover() -> ExecutionResult<Vec<Device>> {
             )
             .map_err(err)?;
         let instance = Arc::new(Instance { _entry: entry, raw });
-        let mut devices = vec![];
+        let mut devices: Vec<Arc<dyn DeviceBackend>> = vec![];
         for physical in instance.raw.enumerate_physical_devices().map_err(err)? {
             let properties = instance.raw.get_physical_device_properties(physical);
             if properties.api_version < vk::API_VERSION_1_1 {
                 continue;
             }
+            let hardware = hardware_info(&instance.raw, physical, &properties);
             let families = instance
                 .raw
                 .get_physical_device_queue_family_properties(physical);
@@ -114,31 +125,82 @@ pub(crate) fn discover() -> ExecutionResult<Vec<Device>> {
             let name = CStr::from_ptr(properties.device_name.as_ptr())
                 .to_string_lossy()
                 .into_owned();
-            devices.push(Device {
-                inner: DeviceBackend::Vulkan(Arc::new(VulkanDevice {
-                    instance: instance.clone(),
-                    physical,
-                    raw,
-                    queue,
-                    family: family as u32,
-                    name,
-                    properties,
-                    state: Mutex::new(State {
-                        pipelines: HashMap::new(),
-                    }),
-                })),
-            });
+            devices.push(Arc::new(VulkanDevice {
+                id: DeviceId::new(),
+                hardware,
+                instance: instance.clone(),
+                physical,
+                raw,
+                queue,
+                family: family as u32,
+                name,
+                properties,
+                state: Mutex::new(State {
+                    pipelines: HashMap::new(),
+                }),
+            }));
         }
         Ok(devices)
     }
 }
 
+// Physical-device identity is distinct from pipelineCacheUUID (which identifies
+// compatible pipeline binaries and cannot correlate different driver APIs).
+unsafe fn hardware_info(
+    instance: &ash::Instance,
+    physical: vk::PhysicalDevice,
+    properties: &vk::PhysicalDeviceProperties,
+) -> HardwareInfo {
+    let pci_supported = unsafe { instance.enumerate_device_extension_properties(physical) }
+        .unwrap_or_default().iter().any(|extension|
+            unsafe { CStr::from_ptr(extension.extension_name.as_ptr()) } == vk::EXT_PCI_BUS_INFO_NAME
+        );
+    let mut ids = vk::PhysicalDeviceIDProperties::default();
+    let mut pci = vk::PhysicalDevicePCIBusInfoPropertiesEXT::default();
+    {
+        let mut properties = vk::PhysicalDeviceProperties2::default().push_next(&mut ids);
+        if pci_supported {
+            properties = properties.push_next(&mut pci);
+        }
+        unsafe {
+            instance.get_physical_device_properties2(physical, &mut properties);
+        }
+    }
+    let memory = unsafe { instance.get_physical_device_memory_properties(physical) };
+    let total_memory_bytes = memory.memory_heaps[..memory.memory_heap_count as usize]
+        .iter()
+        .filter(|heap| heap.flags.contains(vk::MemoryHeapFlags::DEVICE_LOCAL))
+        .try_fold(0u64, |sum, heap| sum.checked_add(heap.size))
+        .filter(|bytes| *bytes > 0);
+    HardwareInfo {
+        uuid: (ids.device_uuid != [0; 16]).then_some(ids.device_uuid),
+        luid: (ids.device_luid_valid == vk::TRUE
+            && ids.device_luid != [0; 8]
+            && ids.device_node_mask.count_ones() == 1)
+            .then_some(DeviceLuid {
+                bytes: ids.device_luid,
+                node_mask: ids.device_node_mask,
+            }),
+        pci: pci_supported
+            .then_some(PciAddress {
+                domain: pci.pci_domain,
+                bus: pci.pci_bus,
+                device: pci.pci_device,
+                function: pci.pci_function,
+            })
+            .filter(|address| address.is_valid()),
+        vendor_id: (properties.vendor_id != 0).then_some(properties.vendor_id),
+        total_memory_bytes,
+    }
+}
+
 impl VulkanDevice {
-    pub fn buffer(
-        self: &Arc<Self>,
+    fn allocate(
+        self: Arc<Self>,
         element: ScalarType,
         values: &[u32],
-    ) -> ExecutionResult<Buffer> {
+    ) -> ExecutionResult<Arc<dyn BufferBackend>> {
+        validate_buffer_values(element, values)?;
         unsafe {
             let bytes = (values.len() as u64)
                 .checked_mul(4)
@@ -185,6 +247,8 @@ impl VulkanDevice {
             };
 
             let owned = Arc::new(VulkanBuffer {
+                element,
+                length: values.len(),
                 device: self.clone(),
                 buffer,
                 memory,
@@ -203,43 +267,30 @@ impl VulkanDevice {
             std::ptr::copy_nonoverlapping(values.as_ptr(), mapped.cast(), values.len());
             self.raw.unmap_memory(memory);
 
-            Ok(Buffer {
-                element,
-                length: values.len(),
-                inner: BufferBackend::Vulkan(owned),
-            })
+            Ok(owned)
         }
     }
 
-    pub fn read(self: &Arc<Self>, buffer: &Buffer) -> ExecutionResult<Vec<u32>> {
-        if !Arc::ptr_eq(self, &buffer.vulkan().device) {
-            return Err(err("buffer belongs to another device"));
-        }
+    fn read_buffer(&self, buffer: &dyn BufferBackend) -> ExecutionResult<Vec<u32>> {
+        let buffer = self.native_buffer(buffer)?;
         let _guard = self.state.lock().map_err(err)?;
         unsafe {
             let mapped = self
                 .raw
-                .map_memory(
-                    buffer.vulkan().memory,
-                    0,
-                    buffer.vulkan().bytes,
-                    vk::MemoryMapFlags::empty(),
-                )
+                .map_memory(buffer.memory, 0, buffer.bytes, vk::MemoryMapFlags::empty())
                 .map_err(err)?;
             let values = std::slice::from_raw_parts(mapped.cast::<u32>(), buffer.length).to_vec();
-            self.raw.unmap_memory(buffer.vulkan().memory);
+            self.raw.unmap_memory(buffer.memory);
             Ok(values)
         }
     }
 
-    pub fn launch(
-        self: &Arc<Self>,
-        handle: &KernelHandle,
-        tuning: &[u32],
-        grid: [u32; 3],
-        workgroup: [u32; 3],
-        args: &[Argument<'_>],
-    ) -> ExecutionResult<()> {
+    fn submit(&self, launch: &Launch<'_>) -> ExecutionResult<()> {
+        launch.validate_device(self)?;
+        let handle = launch.kernel();
+        let grid = launch.grid();
+        let workgroup = launch.workgroup();
+        let args = launch.arguments();
         let limits = &self.properties.limits;
         if workgroup.contains(&0) || grid.contains(&0) {
             return Err(err("launch dimensions must be positive"));
@@ -257,26 +308,16 @@ impl VulkanDevice {
             return Err(err("launch exceeds device dimensions"));
         }
         let module = handle.ir();
-        let kernel = &module.module().kernels[handle.index()];
-        if args.len() != kernel.routine.header.parameters.len() {
-            return Err(err("kernel argument count mismatch"));
-        }
         let mut push = vec![];
         let mut buffers = vec![];
-        for (p, a) in kernel.routine.header.parameters.iter().zip(args) {
-            match (p.ty, a) {
-                (Type::Scalar(t), Argument::Scalar(v)) if t == v.ty() => push.push(match v {
+        for argument in args {
+            match argument {
+                Argument::Scalar(value) => push.push(match value {
                     Literal::Bool(v) => u32::from(*v),
                     Literal::I32(v) => *v as u32,
                     Literal::U32(v) | Literal::F32(v) => *v,
                 }),
-                (Type::Buffer { element, .. }, Argument::Buffer(b)) if element == b.element => {
-                    if !Arc::ptr_eq(self, &b.vulkan().device) {
-                        return Err(err("buffer belongs to another device"));
-                    }
-                    buffers.push(*b)
-                }
-                _ => return Err(err("kernel argument type mismatch")),
+                Argument::Buffer(buffer) => buffers.push(self.native_buffer(*buffer)?),
             }
         }
         if push.len() * 4 > limits.max_push_constants_size as usize {
@@ -285,9 +326,7 @@ impl VulkanDevice {
         if buffers.len() > limits.max_per_stage_descriptor_storage_buffers as usize {
             return Err(err("buffer arguments exceed descriptor limit"));
         }
-        let specialized = module
-            .specialize_kernel(handle.index(), tuning)
-            .map_err(err)?;
+        let specialized = launch.specialized();
         specialized
             .kernel
             .check_allocation_limits(u64::MAX, limits.max_compute_shared_memory_size as u64)
@@ -310,7 +349,7 @@ impl VulkanDevice {
         let mut state = self.state.lock().map_err(err)?;
         if let std::collections::hash_map::Entry::Vacant(entry) = state.pipelines.entry(key) {
             let words =
-                mimir_codegen_spirv::compile(module, &specialized, workgroup).map_err(err)?;
+                mimir_codegen_spirv::compile(module, specialized, workgroup).map_err(err)?;
             let pipeline = self.pipeline(&words, buffers.len(), push.len() * 4)?;
             entry.insert(pipeline);
         }
@@ -352,9 +391,9 @@ impl VulkanDevice {
                 let infos = buffers
                     .iter()
                     .map(|b| vk::DescriptorBufferInfo {
-                        buffer: b.vulkan().buffer,
+                        buffer: b.buffer,
                         offset: 0,
-                        range: b.vulkan().bytes,
+                        range: b.bytes,
                     })
                     .collect::<Vec<_>>();
                 let writes = infos
@@ -538,15 +577,84 @@ impl VulkanDevice {
     }
 }
 
+impl VulkanDevice {
+    fn native_buffer<'a>(
+        &self,
+        buffer: &'a dyn BufferBackend,
+    ) -> ExecutionResult<&'a VulkanBuffer> {
+        validate_buffer_owner(self, buffer)?;
+        let native = buffer
+            .as_any()
+            .downcast_ref::<VulkanBuffer>()
+            .ok_or_else(|| err("buffer is not a Vulkan allocation"))?;
+        // Check native ownership too: a third-party trait adapter can expose
+        // a different object's Any reference or report misleading metadata.
+        if !std::ptr::eq(self, native.device.as_ref()) {
+            return Err(err("buffer belongs to another device"));
+        }
+        if buffer.element_type() != native.element || buffer.len() != native.length {
+            return Err(err("buffer metadata does not match Vulkan allocation"));
+        }
+        Ok(native)
+    }
+}
+impl DeviceBackend for VulkanDevice {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+    fn id(&self) -> DeviceId {
+        self.id.clone()
+    }
+    fn name(&self) -> &str {
+        &self.name
+    }
+    fn backend_name(&self) -> &'static str {
+        "vulkan"
+    }
+    fn priority(&self) -> usize {
+        100
+    }
+    fn hardware_info(&self) -> HardwareInfo {
+        self.hardware.clone()
+    }
+    fn buffer(
+        self: Arc<Self>,
+        element: ScalarType,
+        values: &[u32],
+    ) -> ExecutionResult<Arc<dyn BufferBackend>> {
+        self.allocate(element, values)
+    }
+    fn read(&self, buffer: &dyn BufferBackend) -> ExecutionResult<Vec<u32>> {
+        self.read_buffer(buffer)
+    }
+    unsafe fn launch(&self, launch: &Launch<'_>) -> ExecutionResult<()> {
+        self.submit(launch)
+    }
+}
+impl BufferBackend for VulkanBuffer {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+    fn device(&self) -> Arc<dyn DeviceBackend> {
+        self.device.clone()
+    }
+    fn element_type(&self) -> ScalarType {
+        self.element
+    }
+    fn len(&self) -> usize {
+        self.length
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mimir_runtime_core::KernelHandle;
     #[test]
     #[ignore = "requires a Vulkan compute device"]
     fn concurrent_requests_compile_one_pipeline() {
         let devices = discover().unwrap();
         let device = devices.first().unwrap();
-        let runtime = crate::Runtime::default();
         let module = Module {
             kernels: vec![Kernel {
                 routine: Routine {
@@ -565,23 +673,33 @@ mod tests {
                 debug: DebugInfo::default(),
             }],
             functions: vec![],
-        };
-        let hash = module.clone().validate().unwrap().kernel_hash(0).unwrap();
-        let kernel = runtime.register(hash, module).unwrap();
+        }
+        .validate()
+        .unwrap();
+        let kernel = KernelHandle::new(Arc::new(module), 0).unwrap();
         std::thread::scope(|scope| {
             for _ in 0..8 {
                 let kernel = &kernel;
-                scope.spawn(move || unsafe {
-                    device
-                        .launch(kernel, &[], [1, 1, 1], [1, 1, 1], &[])
-                        .unwrap();
+                scope.spawn(move || {
+                    let launch =
+                        Launch::new(device.as_ref(), kernel, &[], [1, 1, 1], [1, 1, 1], &[])
+                            .unwrap();
+                    unsafe {
+                        device.launch(&launch).unwrap();
+                    }
                 });
             }
         });
         assert_eq!(
-            match &device.inner {
-                DeviceBackend::Vulkan(device) => device.state.lock().unwrap().pipelines.len(),
-            },
+            device
+                .as_any()
+                .downcast_ref::<VulkanDevice>()
+                .unwrap()
+                .state
+                .lock()
+                .unwrap()
+                .pipelines
+                .len(),
             1
         );
     }

@@ -26,7 +26,9 @@ macro_rules! embed_ir {
 
 pub use mimir_macros::mimir_global;
 
-pub use mimir_runtime::{Argument, Buffer, Device, ExecutionError, ExecutionResult};
+pub use mimir_runtime::{
+    Argument, Buffer, Device, DeviceLuid, ExecutionError, ExecutionResult, HardwareInfo, PciAddress,
+};
 
 pub use mimir_macros::launch;
 pub use mimir_macros::mimir_module;

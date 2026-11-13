@@ -9,14 +9,18 @@ repository = "https://github.com/ccleavinger/mimir/tree/master/crates/mimir-runt
 
 [dependencies]
 mimir-ir = { path = "../mimir-ir" }
+mimir-runtime-core = { path = "../mimir-runtime-core" }
 thiserror = "2.0.16"
 
 linkme = "0.3.36"
 
 [features]
 default = ["vulkan"]
-vulkan = ["dep:ash", "dep:mimir-codegen-spirv"]
+vulkan = ["dep:mimir-vulkan-runtime"]
+cuda = ["dep:mimir-cuda-runtime"]
 
 [target.'cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))'.dependencies]
-ash = { workspace = true, optional = true }
-mimir-codegen-spirv = { path = "../mimir-codegen-spirv", optional = true }
+mimir-vulkan-runtime = { path = "../mimir-vulkan-runtime", optional = true }
+
+[target.'cfg(all(any(target_os = "linux", target_os = "windows"), target_pointer_width = "64"))'.dependencies]
+mimir-cuda-runtime = { path = "../mimir-cuda-runtime", optional = true }

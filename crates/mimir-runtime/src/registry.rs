@@ -1,4 +1,4 @@
-use mimir_ir::flat::{Module, ValidatedModule, ValidationError};
+use mimir_ir::flat::{Module, ValidationError};
 use std::{
     collections::HashMap,
     sync::{Arc, LazyLock, RwLock},
@@ -6,7 +6,7 @@ use std::{
 use thiserror::Error;
 
 /// Platform-independent identity of canonical kernel IR, including its callees.
-pub use mimir_ir::flat::SemanticHash as KernelHash;
+pub use mimir_runtime_core::{KernelHandle, KernelHash};
 
 /// A module embedded in the executable, with compile-time kernel identities.
 pub struct LinkedModule {
@@ -30,25 +30,6 @@ pub enum RegistrationError {
     LinkedHashesMismatch,
 }
 
-/// Retains validated module storage; module indices are backend-local metadata,
-/// never registry keys or public kernel identifiers.
-#[derive(Clone)]
-pub struct KernelHandle {
-    module: Arc<ValidatedModule>,
-    index: usize,
-    hash: KernelHash,
-}
-impl KernelHandle {
-    pub fn ir(&self) -> &ValidatedModule {
-        &self.module
-    }
-    pub fn index(&self) -> usize {
-        self.index
-    }
-    pub fn semantic_hash(&self) -> KernelHash {
-        self.hash
-    }
-}
 #[derive(Default)]
 pub struct Runtime {
     kernels: RwLock<HashMap<KernelHash, KernelHandle>>,
@@ -66,16 +47,13 @@ impl Runtime {
                 return Err(RegistrationError::LinkedHashesMismatch);
             }
             for (index, hash) in hashes.into_iter().enumerate() {
+                let handle = KernelHandle::new(validated.clone(), index)?;
                 runtime
                     .kernels
                     .get_mut()
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .entry(hash)
-                    .or_insert_with(|| KernelHandle {
-                        module: validated.clone(),
-                        index,
-                        hash,
-                    });
+                    .or_insert(handle);
             }
         }
         Ok(runtime)
@@ -111,16 +89,13 @@ impl Runtime {
         let validated = module.validate()?;
         for index in 0..validated.module().kernels.len() {
             if validated.kernel_hash(index)? == hash {
+                let handle = KernelHandle::new(Arc::new(validated), index)?;
                 return Ok(self
                     .kernels
                     .write()
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .entry(hash)
-                    .or_insert_with(|| KernelHandle {
-                        module: Arc::new(validated),
-                        index,
-                        hash,
-                    })
+                    .or_insert(handle)
                     .clone());
             }
         }

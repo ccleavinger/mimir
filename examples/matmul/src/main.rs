@@ -133,11 +133,11 @@ fn run_naive(
     ];
 
     // Naive matmul warm-up run
-    unsafe { launch!(matmul_naive_kernel<<<grid_dim,block_dim>>>(a_gpu,b_gpu,c_gpu,M,N,K)) }?;
+    unsafe { launch!(matmul_naive_kernel<<<grid_dim,block_dim>>>(a_gpu, b_gpu, c_gpu, M, N, K)) }?;
 
     // Timed run
     let start_time = Instant::now();
-    unsafe { launch!(matmul_naive_kernel<<<grid_dim,block_dim>>>(a_gpu,b_gpu,c_gpu,M,N,K)) }?;
+    unsafe { launch!(matmul_naive_kernel<<<grid_dim,block_dim>>>(a_gpu, b_gpu, c_gpu, M, N, K)) }?;
     let duration = start_time.elapsed();
 
     println!(
@@ -228,11 +228,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     i, c_host_gpu[i], c_host_cpu[i]
                 );
                 naive_mismatch = true;
-                if i < 10 {
+                if i > 10 {
                     break;
                 } // Show first few mismatches
             }
         }
+
         if !naive_mismatch {
             println!("Naive kernel verification passed!");
         }
@@ -252,9 +253,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 } // Show first few mismatches
             }
         }
+
         if naive_mismatch || tiled_mismatch {
             return Err("GPU matrix multiplication disagrees with CPU reference".into());
         }
+
         if !tiled_mismatch {
             println!("Tiled kernel verification passed!");
         }

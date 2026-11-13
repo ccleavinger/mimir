@@ -1,0 +1,14 @@
+[package]
+name = "mimir-vulkan-runtime"
+version = "0.1.0"
+edition = "2024"
+license.workspace = true
+description = "Vulkan compute backend for Mimir"
+
+[dependencies]
+mimir-runtime-core = { path = "../mimir-runtime-core" }
+
+[target.'cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))'.dependencies]
+mimir-ir.workspace = true
+ash.workspace = true
+mimir-codegen-spirv = { path = "../mimir-codegen-spirv" }

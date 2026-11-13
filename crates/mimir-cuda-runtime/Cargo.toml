@@ -1,0 +1,14 @@
+[package]
+name = "mimir-cuda-runtime"
+version = "0.1.0"
+edition = "2024"
+license.workspace = true
+description = "Lightweight CUDA Driver API backend for Mimir"
+
+[dependencies]
+mimir-runtime-core = { path = "../mimir-runtime-core" }
+
+[target.'cfg(all(any(target_os = "linux", target_os = "windows"), target_pointer_width = "64"))'.dependencies]
+mimir-ir.workspace = true
+mimir-codegen-ptx = { path = "../mimir-codegen-ptx" }
+libloading = "0.8.9"

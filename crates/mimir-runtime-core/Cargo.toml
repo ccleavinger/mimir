@@ -1,0 +1,10 @@
+[package]
+name = "mimir-runtime-core"
+version = "0.1.0"
+edition = "2024"
+license.workspace = true
+description = "Backend-neutral contracts and validation for Mimir runtimes"
+
+[dependencies]
+mimir-ir.workspace = true
+thiserror.workspace = true

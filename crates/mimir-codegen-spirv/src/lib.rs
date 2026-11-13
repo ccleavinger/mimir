@@ -1,5 +1,6 @@
 //! Vulkan SPIR-V generation from validated, specialized flat IR.
 mod inline;
+mod layout;
 use mimir_ir::flat::*;
 use rspirv::{binary::Assemble, dr::Builder, spirv::*};
 use std::collections::BTreeMap;
@@ -7,7 +8,9 @@ use std::collections::BTreeMap;
 #[derive(Debug, thiserror::Error)]
 #[error("SPIR-V compilation: {0}")]
 pub struct CompileError(pub String);
+
 type Result<T> = std::result::Result<T, CompileError>;
+
 fn build<T>(r: std::result::Result<T, rspirv::dr::Error>) -> Result<T> {
     r.map_err(|e| CompileError(e.to_string()))
 }
@@ -24,6 +27,7 @@ struct Compiler {
     workgroup: [u32; 3],
     ext: u32,
 }
+
 fn key(t: ScalarType) -> u8 {
     match t {
         ScalarType::Bool => 0,
@@ -32,6 +36,7 @@ fn key(t: ScalarType) -> u8 {
         ScalarType::F32 => 3,
     }
 }
+
 fn storage_class(s: AddressSpace) -> StorageClass {
     match s {
         AddressSpace::Global => StorageClass::StorageBuffer,
@@ -39,10 +44,12 @@ fn storage_class(s: AddressSpace) -> StorageClass {
         AddressSpace::Workgroup => StorageClass::Workgroup,
     }
 }
+
 impl Compiler {
     fn ty(&self, t: ScalarType) -> u32 {
         self.scalar[&key(t)]
     }
+
     fn literal(&mut self, l: Literal) -> u32 {
         match l {
             Literal::Bool(true) => self.b.constant_true(self.ty(ScalarType::Bool)),
@@ -52,6 +59,7 @@ impl Compiler {
             Literal::F32(v) => self.b.constant_bit32(self.ty(ScalarType::F32), v),
         }
     }
+
     fn operand(&mut self, o: Operand) -> (u32, Type) {
         match o {
             Operand::Parameter(i) => self.params[&i],
@@ -64,30 +72,37 @@ impl Compiler {
             Operand::Literal(l) => (self.literal(l), Type::Scalar(l.ty())),
         }
     }
+
     fn pointer(&mut self, buffer: Operand, index: Operand) -> Result<(u32, ScalarType)> {
         let (buffer, t) = self.operand(buffer);
         let (index, _) = self.operand(index);
+
         let Type::Buffer { element, space, .. } = t else {
             return Err(CompileError("expected buffer".into()));
         };
+
         let mem = if element == ScalarType::Bool {
             ScalarType::U32
         } else {
             element
         };
+
         let ptr = self
             .b
             .type_pointer(None, storage_class(space), self.ty(mem));
+
         let indices = if space == AddressSpace::Global {
             vec![self.literal(Literal::U32(0)), index]
         } else {
             vec![index]
         };
+
         Ok((
             build(self.b.access_chain(ptr, None, buffer, indices))?,
             element,
         ))
     }
+
     fn binary(
         &mut self,
         id: u32,
@@ -100,11 +115,13 @@ impl Compiler {
         let rt = self.ty(t);
         let f = input == ScalarType::F32;
         let s = input == ScalarType::I32;
+
         macro_rules! emit {
             ($method:ident) => {
                 build(self.b.$method(rt, Some(id), a, b))?
             };
         }
+
         match op {
             BinaryOp::Add => {
                 if f {
@@ -206,8 +223,10 @@ impl Compiler {
                 emit!(logical_or);
             }
         }
+
         Ok(())
     }
+
     fn instruction(&mut self, i: &Instruction) -> Result<()> {
         match i {
             Instruction::Value { result, op } => {
@@ -431,14 +450,17 @@ pub fn compile(
             .map_err(|e| CompileError(e.to_string()))?;
         return compile(&module, &specialized, workgroup);
     }
+
     if workgroup.contains(&0) {
         return Err(CompileError("workgroup dimensions must be positive".into()));
     }
+
     let kernel = module
         .module()
         .kernels
         .get(specialized.kernel_index)
         .ok_or_else(|| CompileError("kernel index out of range".into()))?;
+
     if module
         .kernel_hash(specialized.kernel_index)
         .map_err(|e| CompileError(e.to_string()))?
@@ -448,10 +470,12 @@ pub fn compile(
             "specialization belongs to another kernel".into(),
         ));
     }
+
     let mut b = Builder::new();
     b.set_version(1, 3);
     b.capability(Capability::Shader);
     b.memory_model(AddressingModel::Logical, MemoryModel::GLSL450);
+
     let ext = b.ext_inst_import("GLSL.std.450");
     let mut scalar = BTreeMap::new();
     scalar.insert(0, b.type_bool());
@@ -470,6 +494,7 @@ pub fn compile(
         workgroup,
         ext,
     };
+
     let mut interface = vec![];
     for (k, builtin) in [
         (0, BuiltIn::GlobalInvocationId),
@@ -487,6 +512,7 @@ pub fn compile(
         c.builtins.insert(k, var);
         interface.push(var);
     }
+
     let mut scalar_params = vec![];
     let mut binding = 0;
     for p in &kernel.routine.header.parameters {
@@ -535,6 +561,7 @@ pub fn compile(
             _ => return Err(CompileError("kernel buffer must be global".into())),
         }
     }
+
     let push = if scalar_params.is_empty() {
         None
     } else {
@@ -562,12 +589,14 @@ pub fn compile(
             c.b.type_pointer(None, StorageClass::PushConstant, structure);
         Some(c.b.variable(ptr, None, StorageClass::PushConstant, None))
     };
+
     for v in &kernel.routine.header.variables {
         if let Variable::Value { id, ty } = v {
             let word = c.b.id();
             c.values.insert(*id, (word, *ty));
         }
     }
+
     for a in &specialized.kernel.allocations {
         let mem = if a.element == ScalarType::Bool {
             ScalarType::U32
@@ -594,59 +623,19 @@ pub fn compile(
             ),
         );
     }
+
     for block in &kernel.routine.body.blocks {
         let label = c.b.id();
         c.labels.insert(block.id, label);
     }
+
     let void = c.b.type_void();
     let fn_ty = c.b.type_function(void, []);
     let function = build(c.b.begin_function(void, None, FunctionControl::NONE, fn_ty))?;
     c.b.entry_point(ExecutionModel::GLCompute, function, "main", interface);
     c.b.execution_mode(function, ExecutionMode::LocalSize, workgroup);
-    fn visit<'a>(
-        id: BlockId,
-        body: &'a Body,
-        seen: &mut std::collections::BTreeSet<BlockId>,
-        deferred: &mut Vec<BlockId>,
-        out: &mut Vec<&'a Block>,
-    ) {
-        if deferred.contains(&id) || !seen.insert(id) {
-            return;
-        }
-        let block = body.blocks.iter().find(|b| b.id == id).unwrap();
-        out.push(block);
-        let targets = match block.merge {
-            Some(Merge::Selection { merge }) => vec![merge],
-            Some(Merge::Loop { merge, continuing }) => vec![continuing, merge],
-            None => vec![],
-        };
-        deferred.extend(&targets);
-        match &block.terminator {
-            Terminator::Branch(e) => visit(e.target, body, seen, deferred, out),
-            Terminator::Conditional {
-                then_edge,
-                else_edge,
-                ..
-            } => {
-                visit(then_edge.target, body, seen, deferred, out);
-                visit(else_edge.target, body, seen, deferred, out)
-            }
-            _ => {}
-        }
-        deferred.truncate(deferred.len() - targets.len());
-        for target in targets {
-            visit(target, body, seen, deferred, out)
-        }
-    }
-    let mut blocks = vec![];
-    let mut seen = std::collections::BTreeSet::new();
-    visit(
-        kernel.routine.body.entry,
-        &kernel.routine.body,
-        &mut seen,
-        &mut vec![],
-        &mut blocks,
-    );
+
+    let blocks=layout::structured_order(&kernel.routine.body)?;
     for block in blocks {
         build(c.b.begin_block(Some(c.labels[&block.id])))?;
         if block.id == kernel.routine.body.entry {
