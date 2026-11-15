@@ -1,9 +1,11 @@
 use mimir::{default_runtime, mimir_global};
+
 #[mimir_global]
 fn increment(values: &mut [u32], amount: u32) {
     let i: u32 = global_id.x;
     values[i] = values[i] + amount;
 }
+
 #[test]
 fn default_runtime_is_shared_and_registration_is_concurrent() {
     let runtime = default_runtime().unwrap();
@@ -43,14 +45,16 @@ fn default_runtime_is_shared_and_registration_is_concurrent() {
         mimir::MIMIR_RUNTIME.as_ref().unwrap()
     ));
 }
+
 #[test]
 #[ignore = "requires a Vulkan compute device"]
 fn default_and_explicit_device_launches_share_the_context() {
     let device = mimir::default_device().unwrap();
     let buffer = device.buffer_from_slice(&[1u32, 2, 3, 4]).unwrap();
+
     unsafe {
-        mimir::launch!(increment<<<[1,1,1],[4,1,1]>>>(&buffer,2u32)).unwrap();
-        mimir::launch!(&device;increment<<<[1,1,1],[4,1,1]>>>(&buffer,3u32)).unwrap();
+        mimir::launch!(increment<<<[1,1,1],[4,1,1]>>>(&buffer, 2)).unwrap();
+        mimir::launch!(&device; increment<<<[1,1,1],[4,1,1]>>>(&buffer, 3)).unwrap();
     }
     assert_eq!(device.read_typed::<u32>(&buffer).unwrap(), [6, 7, 8, 9]);
 }

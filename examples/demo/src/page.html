@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mimir · GPU demos</title>
+<script src="https://unpkg.com/htmx.org@2.0.4"></script>
+<style>
+:root{color-scheme:dark;font:16px system-ui;background:#101820;color:#edf2f4}body{max-width:960px;margin:3rem auto;padding:0 1rem}header{display:flex;align-items:center;justify-content:space-between;gap:1rem;flex-wrap:wrap}h1{margin-bottom:.25rem}p{line-height:1.6;color:#b7c8d6}nav{display:flex;gap:.4rem;flex-wrap:wrap;margin:2rem 0 0;border-bottom:1px solid #405564}button,select{font:inherit;padding:.65rem 1rem;border:1px solid #405564;border-radius:7px;background:#203240;color:inherit;cursor:pointer}button:hover{background:#30485a}nav button{border-radius:7px 7px 0 0;border-bottom:0}nav button[aria-selected=true]{background:#93e0d4;color:#101820}article{background:#192935;padding:1.5rem;border-radius:0 0 12px 12px;min-height:350px}article[hidden]{display:none}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#101820;padding:1rem;border-radius:8px}canvas{background:white;touch-action:none;border-radius:8px;max-width:100%}button:disabled,input:disabled{opacity:.45;cursor:default}.status{font-size:.85rem}.status pre{margin:.5rem 0}h2{margin-top:0}.htmx-request{opacity:.6}label{display:block;margin-bottom:.5rem}
+</style>
+</head>
+<body>
+<header><div><h1>Mimir</h1><p>One kernel language. Two GPU backends.</p></div><div><label for="target">Run on</label><select id="target"><!-- targets --></select><button hx-get="/run/0/status" hx-target="#status">Refresh status</button></div></header>
+<div id="status" class="status" role="status" aria-live="polite" hx-get="/run/0/status" hx-trigger="load, every 10s">Connecting…</div>
+<nav role="tablist" aria-label="Demos">
+<button id="tab-mnist" role="tab" aria-selected="true" aria-controls="mnist" tabindex="0">MNIST drawing</button>
+<button id="tab-teach" role="tab" aria-selected="false" aria-controls="teach" tabindex="-1">Teach images</button>
+<button id="tab-vector" role="tab" aria-selected="false" aria-controls="vector" tabindex="-1">Vector scale</button>
+<button id="tab-effect" role="tab" aria-selected="false" aria-controls="effect" tabindex="-1">Image effect</button>
+</nav>
+<article id="mnist" role="tabpanel" aria-labelledby="tab-mnist"><h2>Draw a digit</h2><p>Draw a number from 0–9. Prediction is awaiting integration with the MNIST example.</p><canvas id="draw" width="280" height="280" aria-label="Digit drawing area"></canvas><p><button id="clear">Clear</button><button disabled>Predict</button></p></article>
+<article id="teach" role="tabpanel" aria-labelledby="tab-teach" hidden><h2>Teach image classes</h2><p>Image collection and GPU training are awaiting integration.</p><input type="file" accept="image/*" multiple disabled aria-label="Training images"><button disabled>Train classes</button></article>
+<article id="vector" role="tabpanel" aria-labelledby="tab-vector" hidden><h2>Vector scale</h2><p>Multiply [1, 2, 3, 4] by two on the selected GPU.</p><button hx-post="/run/0/vector" hx-target="#vector-result">Run on GPU</button><div id="vector-result" aria-live="polite"></div></article>
+<article id="effect" role="tabpanel" aria-labelledby="tab-effect" hidden><h2>Image effect kernel</h2><p>Scale five grayscale sample values by 0.8 on the selected GPU.</p><button hx-post="/run/0/effect" hx-target="#effect-result">Run on GPU</button><div id="effect-result" aria-live="polite"></div></article>
+<script>
+// Only drawing, tab navigation and target routing need browser-side code.
+const tabs=[...document.querySelectorAll('[role=tab]')];
+function activate(tab){for(const t of tabs){const active=t===tab;t.setAttribute('aria-selected',String(active));t.tabIndex=active?0:-1;document.getElementById(t.getAttribute('aria-controls')).hidden=!active;}}
+for(const [i,tab] of tabs.entries()){tab.onclick=()=>activate(tab);tab.onkeydown=e=>{let next;if(e.key==='ArrowRight')next=(i+1)%tabs.length;if(e.key==='ArrowLeft')next=(i+tabs.length-1)%tabs.length;if(e.key==='Home')next=0;if(e.key==='End')next=tabs.length-1;if(next!==undefined){e.preventDefault();activate(tabs[next]);tabs[next].focus();}};}
+const target=document.getElementById('target');
+document.body.addEventListener('htmx:configRequest',e=>{if(e.detail.path.startsWith('/run/'))e.detail.path=e.detail.path.replace(/^\/run\/\d+\//,'/run/'+target.value+'/');});
+target.onchange=()=>{document.getElementById('vector-result').replaceChildren();document.getElementById('effect-result').replaceChildren();htmx.ajax('GET','/run/'+target.value+'/status',{target:'#status'});};
+const c=document.getElementById('draw'),ctx=c.getContext('2d');ctx.lineWidth=20;ctx.lineCap='round';let down=false;
+function point(e){const r=c.getBoundingClientRect();return [(e.clientX-r.left)*c.width/r.width,(e.clientY-r.top)*c.height/r.height];}
+c.onpointerdown=e=>{down=true;c.setPointerCapture(e.pointerId);const [x,y]=point(e);ctx.beginPath();ctx.moveTo(x,y);ctx.lineTo(x+.01,y);ctx.stroke();};
+c.onpointermove=e=>{if(down){ctx.lineTo(...point(e));ctx.stroke();}};
+c.onpointerup=c.onpointercancel=c.onlostpointercapture=()=>down=false;
+document.getElementById('clear').onclick=()=>ctx.clearRect(0,0,c.width,c.height);
+</script></body></html>

@@ -1,15 +1,19 @@
 use mimir::{Buffer, Device, GpuArray, GpuBuffer, GpuScalar, mimir_global};
+
 #[mimir_global]
 fn increment(values: &mut [u32], amount: u32) {
     let i: u32 = global_id.x;
     values[i] = values[i] + amount;
 }
+
 struct CustomArray(GpuArray<u32>);
+
 impl GpuBuffer for CustomArray {
     fn as_buffer(&self) -> &Buffer {
         self.0.as_buffer()
     }
 }
+
 #[allow(dead_code)]
 unsafe fn accepts_custom_and_erased_buffers(
     device: &Device,
@@ -21,6 +25,7 @@ unsafe fn accepts_custom_and_erased_buffers(
         let _ = mimir::launch!(device;increment<<<[1,1,1],[4,1,1]>>>(erased,1u32));
     }
 }
+
 #[test]
 fn typed_arrays_are_shareable() {
     fn shareable<T: Send + Sync>() {}
@@ -28,6 +33,7 @@ fn typed_arrays_are_shareable() {
     shareable::<GpuArray<f32>>();
     shareable::<GpuArray<bool>>();
 }
+
 #[test]
 #[ignore = "requires a Vulkan compute device"]
 fn typed_arrays_use_their_owning_device_and_launch_through_the_trait() {

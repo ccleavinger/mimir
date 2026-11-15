@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/*", "examples/matmul", "examples/mnist", "fixtures/linked-kernels"]
+members = ["crates/*", "examples/demo", "examples/matmul", "examples/mnist", "examples/mnist-cnn", "fixtures/linked-kernels"]
 resolver = "3"
 
 [workspace.package]

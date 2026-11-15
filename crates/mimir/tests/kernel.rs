@@ -4,6 +4,7 @@ pub fn add(values: &mut [u32], amount: u32) {
     let i: u32 = global_id.x;
     values[i] = values[i] + amount;
 }
+
 #[mimir_global]
 fn loop_kernel(values: &mut [u32]) {
     let x: u32 = global_id.x;
@@ -17,10 +18,12 @@ fn loop_kernel(values: &mut [u32]) {
     }
     values[x] = total;
 }
+
 #[test]
 fn rust_kernel_registers_flat_ir() {
     let runtime = Runtime::new().unwrap();
     let kernel = runtime.kernel(add).unwrap();
+
     assert_eq!(
         kernel.ir().module().kernels[0]
             .routine
@@ -31,6 +34,7 @@ fn rust_kernel_registers_flat_ir() {
     );
     runtime.kernel(loop_kernel).unwrap();
 }
+
 #[test]
 #[ignore = "requires a Vulkan compute device"]
 fn vulkan_executes_embedded_and_uploaded_kernels() {
@@ -41,6 +45,7 @@ fn vulkan_executes_embedded_and_uploaded_kernels() {
         let device = devices.first().expect("Vulkan compute device");
         let buffer = device.buffer(ScalarType::U32, &[1, 2, 3, 4]).unwrap();
         let handle = runtime.kernel(add).unwrap();
+
         for _ in 0..2 {
             device
                 .launch(
@@ -55,6 +60,7 @@ fn vulkan_executes_embedded_and_uploaded_kernels() {
                 )
                 .unwrap();
         }
+
         assert_eq!(device.read(&buffer).unwrap(), [7, 8, 9, 10]);
         let bytes = handle.ir().module().to_bytes().unwrap();
         let uploaded = runtime.register_bytes(add, &bytes).unwrap();
@@ -138,6 +144,7 @@ fn vulkan_executes_embedded_and_uploaded_kernels() {
                 &[Argument::Buffer(&floats)],
             )
             .unwrap();
+
         for (actual, input) in device
             .read_typed::<f32>(&floats)
             .unwrap()
@@ -146,6 +153,7 @@ fn vulkan_executes_embedded_and_uploaded_kernels() {
         {
             assert!((*actual - (input.sin() + 1.0)).abs() < 0.0001);
         }
+
         assert!(device.read_typed::<u32>(&floats).is_err());
         assert!(
             device
@@ -219,6 +227,7 @@ mod helpers {
     fn twice(x: u32) -> u32 {
         return x * 2;
     }
+
     #[device]
     fn choose(x: u32) -> u32 {
         if x < 2 {
@@ -227,6 +236,7 @@ mod helpers {
             return x + 3;
         }
     }
+
     #[kernel]
     pub fn loop_calls(values: &mut [u32]) {
         let mut sum: u32 = 0;
@@ -251,11 +261,13 @@ fn reverse_group<const N: u32>(values: &mut [u32]) {
     syncthreads();
     values[i] = scratch[N - 1u32 - i];
 }
+
 #[mimir_global]
 fn bool_not(values: &mut [bool]) {
     let i: u32 = global_id.x;
     values[i] = !values[i];
 }
+
 #[mimir_global]
 fn float_math(values: &mut [f32]) {
     let i: u32 = global_id.x;

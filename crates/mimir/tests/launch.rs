@@ -1,19 +1,23 @@
 use mimir::{KernelHash, Runtime, launch, mimir_global};
+
 #[mimir_global]
 fn add(values: &mut [u32], amount: u32) {
     let i: u32 = global_id.x;
     values[i] = values[i] + amount;
 }
+
 #[mimir_global]
 fn same_ir_different_name(values: &mut [u32], amount: u32) {
     let i: u32 = global_id.x;
     values[i] = values[i] + amount;
 }
+
 #[mimir_global]
 fn tuned<const N: u32>(values: &mut [u32]) {
     let i: u32 = global_id.x;
     values[i] = values[i] + N;
 }
+
 #[test]
 fn generated_bindings_are_semantic_hashes_and_deduplicate() {
     let _: KernelHash = add;
@@ -25,6 +29,7 @@ fn generated_bindings_are_semantic_hashes_and_deduplicate() {
     let uploaded = Runtime::default();
     assert_eq!(uploaded.register(add, module).unwrap().semantic_hash(), add);
 }
+
 // Compile the macro on backend-free builds and exercise missing-hash errors
 // without submitting any GPU work.
 #[allow(dead_code)]
@@ -32,12 +37,14 @@ unsafe fn compile_shapes(runtime: &Runtime, device: &mimir::Device, buffer: &mim
     let _ = unsafe { launch!(runtime,device;add<<<[1,1,1],[4,1,1]>>>(buffer,3u32)) };
     let _ = unsafe { launch!(runtime,device;tuned<4u32><<<[1,1,1],[4,1,1]>>>(&buffer);) };
 }
+
 macro_rules! hygienic_launch {
     ($r:expr,$d:expr,$k:expr,$b:expr)=>{{
         let runtime=$r;let device=$d;let kernel=$k;let buffer=$b;
         mimir::launch!(runtime,device;kernel<<<[1,1,1],[4,1,1]>>>(buffer,1u32))
     }};
 }
+
 #[test]
 #[ignore = "requires a Vulkan compute device"]
 fn cuda_launch_executes_once_and_preserves_hygiene() {

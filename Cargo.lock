@@ -338,6 +338,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "itoa"
+version = "1.0.19"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3bd1574e617a9a6c1f8f8181bd7e841e1f20e4277607ef28945765188d6284d4"
+
+[[package]]
 name = "js-sys"
 version = "0.3.106"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -492,6 +498,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "mimir-demo"
+version = "0.1.0"
+dependencies = [
+ "mimir",
+ "serde_json",
+]
+
+[[package]]
 name = "mimir-ir"
 version = "0.1.0"
 dependencies = [
@@ -583,6 +597,20 @@ checksum = "a06eb594c0749d3a505304db3b7a9c9891630d32daad059e81bfd0d51846f95c"
 dependencies = [
  "byteorder",
  "log",
+]
+
+[[package]]
+name = "mnist-cnn"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "indicatif",
+ "mimir",
+ "mnist 0.6.0",
+ "pretty_env_logger",
+ "rand 0.10.3",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -820,6 +848,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "serde_json"
+version = "1.0.154"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e7e9cc8b1b85264074fbcc02a88680c4096b1e47df8f739dceb03bf482f04bd6"
+dependencies = [
+ "itoa",
+ "memchr",
+ "serde",
+ "serde_core",
+ "zmij",
+]
+
+[[package]]
 name = "sha2"
 version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1054,3 +1095,9 @@ dependencies = [
  "quote",
  "syn 2.0.114",
 ]
+
+[[package]]
+name = "zmij"
+version = "1.0.23"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "29666d0abbfad1e3dc4dcf6144730dd3a3ab225bbbdac83319345b1b44ccfc1b"
