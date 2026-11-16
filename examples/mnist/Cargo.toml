@@ -1,12 +1,15 @@
 [package]
-name = "mnist"
+name = "mnist-cnn"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+default = ["vulkan"]
+vulkan = ["mimir/vulkan"]
+cuda = ["mimir/cuda"]
+
 [dependencies]
-anyhow = "1.0"
 rand = "0.10"
-mnist = "0.6.0"
 pretty_env_logger = "0.5.0"
-indicatif = "0.18"
-mimir = { path = "../../crates/mimir" }
+mimir = { path = "../../crates/mimir", default-features = false }
+serde_json = "1.0"

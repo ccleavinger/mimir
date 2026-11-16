@@ -53,9 +53,9 @@ errors return JSON with status 503. This is a trusted-network demo without auth.
 
 ## MNIST inference
 
-Place the version 1 model from `mnist-cnn` at
+Place the trained model from `mnist-cnn` at
 `examples/demo/assets/mnist-model.json` on each backend machine before starting.
-The backend loads it once, checks the 784 → 256 → 10 architecture, parameter
+The backend loads it once, checks connected layer shapes (784 inputs, 10 outputs), parameter
 counts and finite values, and uploads weights before opening any listening ports.
 A missing or invalid model terminates startup with its full path and reason.
 The asset path is relative to the example source directory at build time,
@@ -73,3 +73,17 @@ byte values in row-major order (0 background, 255 ink). Values are normalized to
 `elapsed_ms`, and an `image` data URL for the 28×28 input. Empty drawings and
 malformed inputs return an error. Timings include input upload, first-use
 compilation, dense inference and output readback.
+
+The current trainer uses two hidden layers (784 → 512 → 128 → 10), corrected
+ReLU gradients, Adam, and translation augmentation. Its version 2 model format
+is supported alongside existing version 1 models. To train and replace the demo
+asset only after passing 95% on the held-out MNIST test set:
+
+```sh
+MNIST_OUTPUT=examples/demo/assets/mnist-model.json cargo run -p mnist-cnn --release
+```
+
+See `examples/mnist-cnn/README.md` for training settings. Restart backend services
+after replacing the asset; models are loaded once at startup. Copy the qualified
+asset to the same demo assets directory on the Jetson as well. MNIST test accuracy
+does not guarantee the same accuracy for freehand drawings.

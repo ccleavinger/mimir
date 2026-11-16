@@ -1,15 +1,10 @@
-use anyhow::Result;
-
-// Import our MNIST neural network module
 mod mnist_nn;
+mod model;
 
-fn main() -> Result<()> {
-    // Initialize the logger
+fn main() -> Result<(), model::Error> {
     pretty_env_logger::init();
-    println!("Starting MNIST neural network training with Mimir...");
-
-    // Train the neural network on MNIST
-    mnist_nn::train_mnist()?;
-
-    Ok(())
+    if let Some(path) = std::env::args().nth(1) {
+        return mnist_nn::predict_file(&path);
+    }
+    mnist_nn::train_mnist()
 }

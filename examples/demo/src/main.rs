@@ -15,13 +15,16 @@ fn bitmap(width: u32, height: u32, pixels: &[f32]) -> String {
     let size = 54 + width * height * 4;
     let mut bytes = Vec::with_capacity(size as usize);
     bytes.extend_from_slice(b"BM");
+
     for n in [size, 0, 54, 40, width, height] {
         bytes.extend_from_slice(&n.to_le_bytes());
     }
+
     bytes.extend_from_slice(&[1, 0, 32, 0]);
     for n in [0u32, width * height * 4, 2835, 2835, 0, 0] {
         bytes.extend_from_slice(&n.to_le_bytes());
     }
+
     for y in (0..height as usize).rev() {
         for x in 0..width as usize {
             let i = (y * width as usize + x) * 4;
@@ -33,6 +36,7 @@ fn bitmap(width: u32, height: u32, pixels: &[f32]) -> String {
             ]);
         }
     }
+
     const TABLE: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::from("data:image/bmp;base64,");
     for c in bytes.chunks(3) {
@@ -60,6 +64,7 @@ struct Target {
     name: String,
     address: String,
 }
+
 struct Config {
     targets: Vec<Target>,
 }
@@ -198,6 +203,7 @@ fn serve(mut stream: TcpStream, ui: bool, config: &Config) -> Result<(), Error> 
             )?)
         }
     };
+
     let path = path.split('?').next().unwrap_or(&path);
     if ui && method == "GET" && path == "/" {
         let options = config
@@ -213,6 +219,7 @@ fn serve(mut stream: TcpStream, ui: bool, config: &Config) -> Result<(), Error> 
             &include_str!("page.html").replace("<!-- targets -->", &options),
         )?);
     }
+
     if ui && path.starts_with("/run/") {
         let parts: Vec<_> = path.trim_start_matches("/run/").split('/').collect();
         if parts.len() == 2 && ["status", "fractal", "blur", "mnist"].contains(&parts[1]) {
@@ -274,6 +281,7 @@ fn serve(mut stream: TcpStream, ui: bool, config: &Config) -> Result<(), Error> 
             )?);
         }
     }
+
     #[cfg(feature = "backend")]
     if !ui && ["/api/status", "/api/fractal", "/api/blur", "/api/mnist"].contains(&path) {
         let expected = if path == "/api/status" { "GET" } else { "POST" };
@@ -334,8 +342,10 @@ fn main() -> Result<(), Error> {
     if !cfg!(any(feature = "ui", feature = "backend")) {
         return Err("enable ui or backend".into());
     }
+
     #[cfg(feature = "backend")]
     mnist::init()?;
+
     // Environment overrides optional compile-time defaults, so one binary can be reused.
     let api_addr = setting(
         "MIMIR_DEMO_API_ADDR",
@@ -382,23 +392,29 @@ fn main() -> Result<(), Error> {
     } else {
         None
     };
+
     let ui = if cfg!(feature = "ui") {
         Some(TcpListener::bind(&ui_addr)?)
     } else {
         None
     };
+
     let mut threads = Vec::new();
+
     if let Some(listener) = api {
         println!("GPU API: http://{api_addr}");
         let config = config.clone();
         threads.push(std::thread::spawn(move || listen(listener, false, config)));
     }
+
     if let Some(listener) = ui {
         println!("Demo UI: http://{ui_addr}");
         threads.push(std::thread::spawn(move || listen(listener, true, config)));
     }
+
     for thread in threads {
         thread.join().map_err(|_| "server thread panicked")?;
     }
+
     Ok(())
 }

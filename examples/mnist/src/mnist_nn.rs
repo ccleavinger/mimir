@@ -1,917 +1,390 @@
-use indicatif::ProgressBar;
-use mimir::default_runtime as runtime;
-use mimir::{Argument, ir::Literal, mimir_global};
-use mimir::{GpuArray, default_device as device};
-
-use mnist::MnistBuilder;
-use rand::distr::{Distribution, Uniform};
+use crate::model::{probabilities, Error, Model, INPUT, OUTPUT};
+use mimir::{launch, mimir_global, GpuArray};
+use rand::{seq::SliceRandom, RngExt, SeedableRng};
+use serde_json::{json, Value};
 use std::time::Instant;
+const BATCH: usize = 64;
 
-// Constants matching the CUDA example
-pub const INPUT_SIZE: usize = 784; // 28x28 pixels
-pub const HIDDEN_SIZE: usize = 4096;
-pub const OUTPUT_SIZE: usize = 10;
-pub const BATCH_SIZE: usize = 32;
-pub const EPOCHS: usize = 20;
-// pub const LEARNING_RATE: f32 = 0.05;
-
-// Neural Network Structure
-pub struct NeuralNetwork {
-    weights1: GpuArray<f32>,
-    weights2: GpuArray<f32>,
-    bias1: GpuArray<f32>,
-    bias2: GpuArray<f32>,
-    grad_weights1: GpuArray<f32>,
-    grad_weights2: GpuArray<f32>,
-    grad_bias1: GpuArray<f32>,
-    grad_bias2: GpuArray<f32>,
-}
-
-// Matrix multiplication kernel (A @ B = C)
 #[mimir_global]
-fn matmul_a_b_kernel(A: &[f32], B: &[f32], C: &mut [f32], m: i32, n: i32, k: i32) {
-    let row = (block_idx.y * block_dim.y + thread_idx.y) as i32;
-    let col = (block_idx.x * block_dim.x + thread_idx.x) as i32;
-
-    if row < m && col < k {
-        let mut tmp = 0.0;
-        for i in 0..n {
-            tmp += A[(row * n + i)] * B[i * k + col];
+fn output_gradient(logits: &[f32], labels: &[i32], grad: &mut [f32], batch: i32) {
+    let row = (block_idx.x * block_dim.x + thread_idx.x) as i32;
+    if row < batch {
+        let mut largest = logits[row * 10];
+        for j in 1..10 {
+            largest = max(largest, logits[row * 10 + j]);
         }
-        C[row * k + col] = tmp;
-    }
-}
-
-// Matrix multiplication kernel (A @ B.T = C)
-#[mimir_global]
-fn matmul_a_bt_kernel(A: &[f32], B: &[f32], C: &mut [f32], m: i32, n: i32, k: i32) {
-    let row = (block_idx.y * block_dim.y + thread_idx.y) as i32;
-    let col = (block_idx.x * block_dim.x + thread_idx.x) as i32;
-
-    if row < m && col < k {
-        let mut sum = 0.0;
-        for i in 0..n {
-            sum += A[row * n + i] * B[col * n + i];
+        let mut sum = 0.0f32;
+        for j in 0..10 {
+            sum += exp(logits[row * 10 + j] - largest);
         }
-        C[row * k + col] = sum;
-    }
-}
-
-// Matrix multiplication kernel (A.T @ B = C)
-#[mimir_global]
-fn matmul_at_b_kernel(A: &[f32], B: &[f32], C: &mut [f32], m: i32, n: i32, k: i32) {
-    let row = (block_idx.y * block_dim.y + thread_idx.y) as i32;
-    let col = (block_idx.x * block_dim.x + thread_idx.x) as i32;
-
-    if row < n && col < k {
-        let mut sum = 0.0;
-        for i in 0..m {
-            sum += A[i * n + row] * B[i * k + col];
-        }
-        C[row * k + col] = sum;
-    }
-}
-
-// ReLU activation kernel
-#[mimir_global]
-fn relu_kernel(x: &mut [f32], size: i32) {
-    let idx = (block_idx.x * block_dim.x + thread_idx.x) as i32;
-    if idx < size {
-        x[idx] = max(x[idx], 0.0);
-    }
-}
-
-// Bias addition kernel
-#[mimir_global]
-fn bias_add_kernel(x: &mut [f32], bias: &[f32], batch_size: i32, size: i32) {
-    let idx = (block_idx.x * block_dim.x + thread_idx.x) as i32;
-    let b = idx / size;
-    let i = idx % size;
-
-    if b < batch_size && i < size {
-        x[b * size + i] += bias[i];
-    }
-}
-
-// Softmax kernel
-#[mimir_global]
-fn softmax_kernel(x: &mut [f32], batch_size: i32, size: i32) {
-    let b = (block_idx.x) as i32;
-    if b < batch_size {
-        // Find max for numerical stability
-        let mut max_val = f32::MIN;
-        for i in 0..size {
-            max_val = max(max_val, x[b * size + i]);
-        }
-
-        // Compute exp and sum
-        let mut sum = 0.0;
-        for i in 0..size {
-            let exp_val = exp(x[b * size + i] - max_val);
-            x[b * size + i] = exp_val;
-            sum += exp_val;
-        }
-
-        // Normalize
-        for i in 0..size {
-            x[b * size + i] /= sum;
+        for j in 0..10 {
+            let mut v = exp(logits[row * 10 + j] - largest) / sum;
+            if j == labels[row] {
+                v -= 1.0;
+            }
+            grad[row * 10 + j] = v / batch as f32;
         }
     }
 }
 
-// Zero gradient kernel
 #[mimir_global]
-fn zero_grad_kernel(grad: &mut [f32], size: i32) {
-    let idx = (block_idx.x * block_dim.x + thread_idx.x) as i32;
-    if idx < size {
-        grad[idx] = 0.0;
-    }
-}
-
-// Compute output gradients kernel
-#[mimir_global]
-fn compute_output_gradients_kernel(
-    grad_output: &mut [f32],
-    output: &[f32],
-    labels: &[i32],
-    batch_size: i32,
+fn backward(
+    grad: &[f32],
+    weights: &[f32],
+    activation: &[f32],
+    previous: &mut [f32],
+    inputs: i32,
+    outputs: i32,
+    count: i32,
 ) {
-    let OUTPUT_SIZE = 10;
-
-    let b = ((block_idx.x * block_dim.x) + thread_idx.x) as i32;
-    if b < batch_size {
-        let output_size = OUTPUT_SIZE;
-
-        // Copy output probabilities to gradients
-        for i in 0..output_size {
-            grad_output[b * output_size + i] = output[b * output_size + i];
+    let i = (block_idx.x * block_dim.x + thread_idx.x) as i32;
+    if i < count {
+        let row = i / inputs;
+        let col = i % inputs;
+        let mut sum = 0.0f32;
+        for j in 0..outputs {
+            sum += grad[row * outputs + j] * weights[col * outputs + j];
         }
-
-        // Subtract 1.0 from the correct class (y_pred - one_hot(y_true))
-        let label = labels[b];
-        if label < output_size {
-            grad_output[b * output_size + label] -= 1.0;
+        // ReLU's derivative depends on the forward activation, never the gradient sign.
+        if activation[i] <= 0.0 {
+            sum = 0.0;
         }
-
-        // Divide by batch size (average over batch)
-        for i in 0..output_size {
-            grad_output[b * output_size + i] /= batch_size as f32;
-        }
+        previous[i] = sum;
     }
 }
 
-// ReLU derivative kernel
 #[mimir_global]
-fn drelu_kernel(x: &[f32], d_relu_out: &mut [f32], size: i32) {
-    let idx = (block_idx.x * block_dim.x + thread_idx.x) as i32;
-    if idx < size {
-        // d_relu_out[idx] if x[idx] > 0.0 { 1.0 } else { 0.0 };
-        if d_relu_out[idx] > 0.0 {
-            d_relu_out[idx] = 1.0
+fn weight_gradient(
+    input: &[f32],
+    grad: &[f32],
+    dw: &mut [f32],
+    inputs: i32,
+    outputs: i32,
+    batch: i32,
+) {
+    let i = (block_idx.x * block_dim.x + thread_idx.x) as i32;
+    if i < inputs * outputs {
+        let row = i / outputs;
+        let col = i % outputs;
+        let mut sum = 0.0f32;
+        for b in 0..batch {
+            sum += input[b * inputs + row] * grad[b * outputs + col];
+        }
+        dw[i] = sum;
+    }
+}
+
+#[mimir_global]
+fn bias_gradient(grad: &[f32], db: &mut [f32], outputs: i32, batch: i32) {
+    let i = (block_idx.x * block_dim.x + thread_idx.x) as i32;
+    if i < outputs {
+        let mut sum = 0.0f32;
+        for b in 0..batch {
+            sum += grad[b * outputs + i];
+        }
+        db[i] = sum;
+    }
+}
+
+#[mimir_global]
+fn adam(
+    weights: &mut [f32],
+    grad: &[f32],
+    mean: &mut [f32],
+    variance: &mut [f32],
+    count: i32,
+    lr: f32,
+    correction1: f32,
+    correction2: f32,
+) {
+    let i = (block_idx.x * block_dim.x + thread_idx.x) as i32;
+    if i < count {
+        let g = grad[i];
+        let m = 0.9 * mean[i] + 0.1 * g;
+        let v = 0.999 * variance[i] + 0.001 * g * g;
+        mean[i] = m;
+        variance[i] = v;
+        weights[i] -= lr * (m / correction1) / (sqrt(v / correction2) + 0.00000001);
+    }
+}
+
+struct Optimizer {
+    dw: GpuArray<f32>,
+    db: GpuArray<f32>,
+    mw: GpuArray<f32>,
+    vw: GpuArray<f32>,
+    mb: GpuArray<f32>,
+    vb: GpuArray<f32>,
+}
+
+fn zeros(n: usize) -> Result<GpuArray<f32>, Error> {
+    Ok(GpuArray::from_slice(&vec![0.0f32; n])?)
+}
+
+fn train_batch(
+    model: &Model,
+    optim: &[Optimizer],
+    x: Vec<f32>,
+    y: &[i32],
+    step: i32,
+    lr: f32,
+) -> Result<(), Error> {
+    let batch = y.len();
+    let a = model.forward(GpuArray::from_slice(&x)?, batch)?;
+    let labels = GpuArray::from_slice(y)?;
+    let mut grad = zeros(batch * OUTPUT)?;
+    // All launches write disjoint output slots; separate buffers preserve forward activations.
+    unsafe {
+        launch!(output_gradient<<<[(batch as u32).div_ceil(64),1,1],[64,1,1]>>>(a.last().unwrap(),&labels,&grad,batch as i32))?;
+    }
+    for index in (0..model.layers.len()).rev() {
+        let l = &model.layers[index];
+        let o = &optim[index];
+        let previous = if index > 0 {
+            let count = batch * l.inputs;
+            let previous = zeros(count)?;
+            // Propagate using the current weights before Adam changes them.
+            unsafe {
+                launch!(backward<<<[(count as u32).div_ceil(128),1,1],[128,1,1]>>>(&grad,&l.weights,&a[index],&previous,l.inputs as i32,l.outputs as i32,count as i32))?;
+            }
+            Some(previous)
         } else {
-            d_relu_out[idx] = 0.0
+            None
+        };
+        let count = l.inputs * l.outputs;
+        unsafe {
+            launch!(weight_gradient<<<[(count as u32).div_ceil(128),1,1],[128,1,1]>>>(&a[index],&grad,&o.dw,l.inputs as i32,l.outputs as i32,batch as i32))?;
+            launch!(bias_gradient<<<[(l.outputs as u32).div_ceil(128),1,1],[128,1,1]>>>(&grad,&o.db,l.outputs as i32,batch as i32))?;
+            launch!(adam<<<[(count as u32).div_ceil(128),1,1],[128,1,1]>>>(&l.weights,&o.dw,&o.mw,&o.vw,count as i32,lr,1.0-0.9f32.powi(step),1.0-0.999f32.powi(step)))?;
+            launch!(adam<<<[(l.outputs as u32).div_ceil(128),1,1],[128,1,1]>>>(&l.bias,&o.db,&o.mb,&o.vb,l.outputs as i32,lr,1.0-0.9f32.powi(step),1.0-0.999f32.powi(step)))?;
+        }
+        if let Some(previous) = previous {
+            grad = previous;
         }
     }
-}
-
-// Element-wise multiplication of gradients
-#[mimir_global]
-fn multiply_gradients_kernel(grad1: &mut [f32], grad2: &[f32], size: i32) {
-    let idx = (block_idx.x * block_dim.x + thread_idx.x) as i32;
-    if idx < size {
-        grad1[idx] *= grad2[idx];
-    }
-}
-
-// Update weights kernel
-#[mimir_global]
-fn update_weights_kernel(weights: &mut [f32], grad_weights: &[f32], size: i32) {
-    let LEARNING_RATE = 0.05;
-    let idx = (block_idx.x * block_dim.x + thread_idx.x) as i32;
-    if idx < size {
-        weights[idx] -= LEARNING_RATE * grad_weights[idx];
-    }
-}
-
-impl NeuralNetwork {
-    pub fn new() -> anyhow::Result<Self> {
-        // Initialize random weights with Kaiming initialization
-        let mut rng = rand::rng();
-        let scale_w1 = (2.0 / INPUT_SIZE as f32).sqrt();
-        let scale_w2 = (2.0 / HIDDEN_SIZE as f32).sqrt();
-
-        let w1_dist = Uniform::new(-scale_w1, scale_w1).unwrap();
-        let w2_dist = Uniform::new(-scale_w2, scale_w2).unwrap();
-
-        let mut weights1 = vec![0.0; HIDDEN_SIZE * INPUT_SIZE];
-        let mut weights2 = vec![0.0; OUTPUT_SIZE * HIDDEN_SIZE];
-        let mut bias1 = vec![0.0; HIDDEN_SIZE];
-        let mut bias2 = vec![0.0; OUTPUT_SIZE];
-
-        for w in weights1.iter_mut() {
-            *w = w1_dist.sample(&mut rng);
-        }
-
-        for w in weights2.iter_mut() {
-            *w = w2_dist.sample(&mut rng);
-        }
-
-        // Initialize biases to zeros
-        for b in bias1.iter_mut() {
-            *b = 0.0;
-        }
-
-        for b in bias2.iter_mut() {
-            *b = 0.0;
-        }
-
-        // Create GPU arrays
-        let weights1_gpu = GpuArray::from_iter(weights1)?;
-        let weights2_gpu = GpuArray::from_iter(weights2)?;
-        let bias1_gpu = GpuArray::from_iter(bias1)?;
-        let bias2_gpu = GpuArray::from_iter(bias2)?;
-
-        // Create gradient arrays (initialized to zeros during training)
-        let grad_weights1_gpu = GpuArray::from_iter(vec![0.0; HIDDEN_SIZE * INPUT_SIZE])?;
-        let grad_weights2_gpu = GpuArray::from_iter(vec![0.0; OUTPUT_SIZE * HIDDEN_SIZE])?;
-        let grad_bias1_gpu = GpuArray::from_iter(vec![0.0; HIDDEN_SIZE])?;
-        let grad_bias2_gpu = GpuArray::from_iter(vec![0.0; OUTPUT_SIZE])?;
-
-        Ok(NeuralNetwork {
-            weights1: weights1_gpu,
-            weights2: weights2_gpu,
-            bias1: bias1_gpu,
-            bias2: bias2_gpu,
-            grad_weights1: grad_weights1_gpu,
-            grad_weights2: grad_weights2_gpu,
-            grad_bias1: grad_bias1_gpu,
-            grad_bias2: grad_bias2_gpu,
-        })
-    }
-
-    pub fn forward(
-        &self,
-        input: &GpuArray<f32>,
-        hidden: &mut GpuArray<f32>,
-        output: &mut GpuArray<f32>,
-        batch_size: usize,
-    ) -> anyhow::Result<()> {
-        // Define block and grid sizes
-        let block_size = [32, 32, 1] as [u32; 3];
-        let grid_size_hidden = [
-            (HIDDEN_SIZE as u32).div_ceil(block_size[0]), // columns
-            (batch_size as u32).div_ceil(block_size[1]),  // rows
-            1,
-        ] as [u32; 3];
-
-        //println!("Input to Hidden (X @ W1)");
-        unsafe {
-            device()?.launch(
-                &runtime()?.kernel(matmul_a_b_kernel)?,
-                &[],
-                grid_size_hidden,
-                block_size,
-                &[
-                    Argument::Buffer(&(input).as_buffer()),
-                    Argument::Buffer(&(&self.weights1).as_buffer()),
-                    Argument::Buffer(&(hidden).as_buffer()),
-                    Argument::Scalar(Literal::I32(batch_size as i32)),
-                    Argument::Scalar(Literal::I32(INPUT_SIZE as i32)),
-                    Argument::Scalar(Literal::I32(HIDDEN_SIZE as i32)),
-                ],
-            )
-        }?;
-        //println!("Finished Input to Hidden (X @ W1)");
-
-        //println!("Add bias1");
-        let bias_block_size = 256;
-        let bias_grid_size = ((batch_size * HIDDEN_SIZE) as u32).div_ceil(bias_block_size);
-
-        {
-            let block_size = [bias_block_size, 1, 1] as [u32; 3];
-            let grid_size = [bias_grid_size, 1, 1] as [u32; 3];
-
-            unsafe {
-                device()?.launch(
-                    &runtime()?.kernel(bias_add_kernel)?,
-                    &[],
-                    grid_size,
-                    block_size,
-                    &[
-                        Argument::Buffer(&(hidden).as_buffer()),
-                        Argument::Buffer(&(&self.bias1).as_buffer()),
-                        Argument::Scalar(Literal::I32(batch_size as i32)),
-                        Argument::Scalar(Literal::I32(HIDDEN_SIZE as i32)),
-                    ],
-                )
-            }?;
-        }
-        //println!("Finished add bias1");
-
-        //println!("Apply ReLU");
-        let relu_block_size = 256;
-        let relu_grid_size = ((batch_size * HIDDEN_SIZE) as u32).div_ceil(relu_block_size);
-
-        {
-            let block_size = [relu_block_size, 1, 1] as [u32; 3];
-            let grid_size = [relu_grid_size, 1, 1] as [u32; 3];
-
-            unsafe {
-                device()?.launch(
-                    &runtime()?.kernel(relu_kernel)?,
-                    &[],
-                    grid_size,
-                    block_size,
-                    &[
-                        Argument::Buffer(&(hidden).as_buffer()),
-                        Argument::Scalar(Literal::I32((batch_size * HIDDEN_SIZE) as i32)),
-                    ],
-                )
-            }?;
-        }
-        //println!("Finished Apply ReLU");
-
-        //println!("Hidden to Output (Hidden @ W2)");
-        let grid_size_output = [
-            (OUTPUT_SIZE as u32).div_ceil(block_size[0]), // columns
-            (batch_size as u32).div_ceil(block_size[1]),  // rows
-            1,
-        ] as [u32; 3];
-
-        unsafe {
-            device()?.launch(
-                &runtime()?.kernel(matmul_a_b_kernel)?,
-                &[],
-                grid_size_output,
-                block_size,
-                &[
-                    Argument::Buffer(&(hidden).as_buffer()),
-                    Argument::Buffer(&(&self.weights2).as_buffer()),
-                    Argument::Buffer(&(output).as_buffer()),
-                    Argument::Scalar(Literal::I32(batch_size as i32)),
-                    Argument::Scalar(Literal::I32(HIDDEN_SIZE as i32)),
-                    Argument::Scalar(Literal::I32(OUTPUT_SIZE as i32)),
-                ],
-            )
-        }?;
-        //println!("Finished Hidden to Output (W2)");
-
-        //println!("Add bias2");
-        let bias_grid_size = ((batch_size * OUTPUT_SIZE) as u32).div_ceil(bias_block_size);
-
-        {
-            let grid_size = [bias_grid_size, 1, 1] as [u32; 3];
-            let block_size = [bias_block_size, 1, 1] as [u32; 3];
-
-            unsafe {
-                device()?.launch(
-                    &runtime()?.kernel(bias_add_kernel)?,
-                    &[],
-                    grid_size,
-                    block_size,
-                    &[
-                        Argument::Buffer(&(output).as_buffer()),
-                        Argument::Buffer(&(&self.bias2).as_buffer()),
-                        Argument::Scalar(Literal::I32(batch_size as i32)),
-                        Argument::Scalar(Literal::I32(OUTPUT_SIZE as i32)),
-                    ],
-                )
-            }?;
-        }
-        //println!("Finished Add bias2");
-
-        //println!("Softmax Results");
-        {
-            let grid_size = [batch_size as u32, 1, 1];
-            let block_size = [1, 1, 1];
-
-            // Apply softmax
-            unsafe {
-                device()?.launch(
-                    &runtime()?.kernel(softmax_kernel)?,
-                    &[],
-                    grid_size,
-                    block_size,
-                    &[
-                        Argument::Buffer(&(output).as_buffer()),
-                        Argument::Scalar(Literal::I32(batch_size as i32)),
-                        Argument::Scalar(Literal::I32(OUTPUT_SIZE as i32)),
-                    ],
-                )
-            }?;
-        }
-        //println!("Finished Softmax");
-
-        Ok(())
-    }
-
-    pub fn backward(
-        &mut self,
-        input: &GpuArray<f32>,
-        hidden: &GpuArray<f32>,
-        output: &GpuArray<f32>,
-        labels: &GpuArray<i32>,
-        batch_size: usize,
-    ) -> anyhow::Result<()> {
-        // Zero out gradients
-        let zero_block_size = 256;
-
-        let w1_size = HIDDEN_SIZE * INPUT_SIZE;
-        let w1_grid_size = (w1_size as u32).div_ceil(zero_block_size);
-
-        let w1_grid = [w1_grid_size, 1, 1];
-        let zero_block = [zero_block_size, 1, 1];
-
-        unsafe {
-            device()?.launch(
-                &runtime()?.kernel(zero_grad_kernel)?,
-                &[],
-                w1_grid,
-                zero_block,
-                &[
-                    Argument::Buffer(&(&self.grad_weights1).as_buffer()),
-                    Argument::Scalar(Literal::I32(w1_size as i32)),
-                ],
-            )
-        }?;
-
-        let w2_size = OUTPUT_SIZE * HIDDEN_SIZE;
-        let w2_grid_size = (w2_size as u32).div_ceil(zero_block_size);
-
-        let w2_grid = [w2_grid_size, 1, 1];
-        unsafe {
-            device()?.launch(
-                &runtime()?.kernel(zero_grad_kernel)?,
-                &[],
-                w2_grid,
-                zero_block,
-                &[
-                    Argument::Buffer(&(&self.grad_weights2).as_buffer()),
-                    Argument::Scalar(Literal::I32(w2_size as i32)),
-                ],
-            )
-        }?;
-
-        let b1_grid_size = (HIDDEN_SIZE as u32).div_ceil(zero_block_size);
-
-        let b1_grid = [b1_grid_size, 1, 1];
-        unsafe {
-            device()?.launch(
-                &runtime()?.kernel(zero_grad_kernel)?,
-                &[],
-                b1_grid,
-                zero_block,
-                &[
-                    Argument::Buffer(&(&self.grad_bias1).as_buffer()),
-                    Argument::Scalar(Literal::I32(HIDDEN_SIZE as i32)),
-                ],
-            )
-        }?;
-
-        let b2_grid_size = (OUTPUT_SIZE as u32).div_ceil(zero_block_size);
-
-        let b2_grid = [b2_grid_size, 1, 1];
-        unsafe {
-            device()?.launch(
-                &runtime()?.kernel(zero_grad_kernel)?,
-                &[],
-                b2_grid,
-                zero_block,
-                &[
-                    Argument::Buffer(&(&self.grad_bias2).as_buffer()),
-                    Argument::Scalar(Literal::I32(OUTPUT_SIZE as i32)),
-                ],
-            )
-        }?;
-
-        // Compute output gradients
-        let mut grad_output = GpuArray::from_iter(vec![0.0; batch_size * OUTPUT_SIZE])?;
-        let output_grad_block_size = 256;
-        let output_grad_grid_size = ((batch_size) as u32).div_ceil(output_grad_block_size);
-
-        let output_grad_grid = [output_grad_grid_size, 1, 1];
-        let output_grad_block = [output_grad_block_size, 1, 1];
-        unsafe {
-            device()?.launch(
-                &runtime()?.kernel(compute_output_gradients_kernel)?,
-                &[],
-                output_grad_grid,
-                output_grad_block,
-                &[
-                    Argument::Buffer(&(&mut grad_output).as_buffer()),
-                    Argument::Buffer(&(output).as_buffer()),
-                    Argument::Buffer(&(labels).as_buffer()),
-                    Argument::Scalar(Literal::I32(batch_size as i32)),
-                ],
-            )
-        }?;
-
-        // Update gradients for weights2 (W2.grad = hidden.T @ grad_output)
-        let block_size = [32, 32, 1] as [u32; 3];
-        let grid_size_w2 = [
-            (OUTPUT_SIZE as u32).div_ceil(block_size[0]), // columns
-            (HIDDEN_SIZE as u32).div_ceil(block_size[1]), // rows
-            1,
-        ] as [u32; 3];
-
-        unsafe {
-            device()?.launch(
-                &runtime()?.kernel(matmul_at_b_kernel)?,
-                &[],
-                grid_size_w2,
-                block_size,
-                &[
-                    Argument::Buffer(&(hidden).as_buffer()),
-                    Argument::Buffer(&(&grad_output).as_buffer()),
-                    Argument::Buffer(&(&self.grad_weights2).as_buffer()),
-                    Argument::Scalar(Literal::I32(batch_size as i32)),
-                    Argument::Scalar(Literal::I32(HIDDEN_SIZE as i32)),
-                    Argument::Scalar(Literal::I32(OUTPUT_SIZE as i32)),
-                ],
-            )
-        }?;
-
-        // Compute dX2 (gradient of loss w.r.t. input of second layer)
-        let mut d_d_x2 = GpuArray::from_iter(vec![0.0; batch_size * HIDDEN_SIZE])?;
-        let grid_size_d_x2 = [
-            (HIDDEN_SIZE as u32).div_ceil(block_size[0]),
-            (batch_size as u32).div_ceil(block_size[1]),
-            1,
-        ] as [u32; 3];
-
-        unsafe {
-            device()?.launch(
-                &runtime()?.kernel(matmul_a_bt_kernel)?,
-                &[],
-                grid_size_d_x2,
-                block_size,
-                &[
-                    Argument::Buffer(&(&grad_output).as_buffer()),
-                    Argument::Buffer(&(&self.weights2).as_buffer()),
-                    Argument::Buffer(&(&mut d_d_x2).as_buffer()),
-                    Argument::Scalar(Literal::I32(batch_size as i32)),
-                    Argument::Scalar(Literal::I32(OUTPUT_SIZE as i32)),
-                    Argument::Scalar(Literal::I32(HIDDEN_SIZE as i32)),
-                ],
-            )
-        }?;
-
-        // Compute ReLU derivative
-        let mut grad_hidden = GpuArray::from_iter(vec![0.0; batch_size * HIDDEN_SIZE])?;
-        let hidden_grad_block_size = 256;
-        let hidden_grad_grid_size =
-            ((batch_size * HIDDEN_SIZE) as u32).div_ceil(hidden_grad_block_size);
-
-        let hidden_grad_grid = [hidden_grad_grid_size, 1, 1];
-        let hidden_grad_block = [hidden_grad_block_size, 1, 1];
-        unsafe {
-            device()?.launch(
-                &runtime()?.kernel(drelu_kernel)?,
-                &[],
-                hidden_grad_grid,
-                hidden_grad_block,
-                &[
-                    Argument::Buffer(&(hidden).as_buffer()),
-                    Argument::Buffer(&(&mut grad_hidden).as_buffer()),
-                    Argument::Scalar(Literal::I32((batch_size * HIDDEN_SIZE) as i32)),
-                ],
-            )
-        }?;
-
-        // Element-wise multiplication for backprop through ReLU
-        let hidden_grad_grid = [hidden_grad_grid_size, 1, 1];
-        let hidden_grad_block = [hidden_grad_block_size, 1, 1];
-        unsafe {
-            device()?.launch(
-                &runtime()?.kernel(multiply_gradients_kernel)?,
-                &[],
-                hidden_grad_grid,
-                hidden_grad_block,
-                &[
-                    Argument::Buffer(&(&mut d_d_x2).as_buffer()),
-                    Argument::Buffer(&(&grad_hidden).as_buffer()),
-                    Argument::Scalar(Literal::I32((batch_size * HIDDEN_SIZE) as i32)),
-                ],
-            )
-        }?;
-
-        // Update gradients for weights1 (W1.grad = input.T @ d_dX2)
-        let grid_size_w1 = [
-            (HIDDEN_SIZE as u32).div_ceil(block_size[0]), // columns
-            (INPUT_SIZE as u32).div_ceil(block_size[1]),  // rows
-            1,
-        ] as [u32; 3];
-
-        // println!("Calculating grad_weights1");
-        // println!("grid_size: {:?}\nblock_size: {:?}", grid_size_w1, block_size);
-
-        unsafe {
-            device()?.launch(
-                &runtime()?.kernel(matmul_at_b_kernel)?,
-                &[],
-                grid_size_w1,
-                block_size,
-                &[
-                    Argument::Buffer(&(input).as_buffer()),
-                    Argument::Buffer(&(&d_d_x2).as_buffer()),
-                    Argument::Buffer(&(&self.grad_weights1).as_buffer()),
-                    Argument::Scalar(Literal::I32(batch_size as i32)),
-                    Argument::Scalar(Literal::I32(INPUT_SIZE as i32)),
-                    Argument::Scalar(Literal::I32(HIDDEN_SIZE as i32)),
-                ],
-            )
-        }?;
-
-        // Manually accumulate bias gradients
-        // For bias2
-        let bias_output_vec = grad_output.to_vec()?;
-        let mut bias2_grad_vec = vec![0.0; OUTPUT_SIZE];
-
-        for b in 0..batch_size {
-            for i in 0..OUTPUT_SIZE {
-                bias2_grad_vec[i] += bias_output_vec[b * OUTPUT_SIZE + i];
-            }
-        }
-
-        // For bias1
-        let d_d_x2_vec = d_d_x2.to_vec()?;
-        let mut bias1_grad_vec = vec![0.0; HIDDEN_SIZE];
-
-        for b in 0..batch_size {
-            for i in 0..HIDDEN_SIZE {
-                bias1_grad_vec[i] += d_d_x2_vec[b * HIDDEN_SIZE + i];
-            }
-        }
-
-        // Copy back to GPU
-        self.grad_bias1 = GpuArray::from_iter(bias1_grad_vec)?;
-        self.grad_bias2 = GpuArray::from_iter(bias2_grad_vec)?;
-
-        Ok(())
-    }
-
-    pub fn update_weights(&mut self) -> anyhow::Result<()> {
-        let block_size = 256;
-
-        // Update weights1
-        let w1_size = HIDDEN_SIZE * INPUT_SIZE;
-        let w1_grid_size = (w1_size as u32).div_ceil(block_size);
-
-        let w1_grid = [w1_grid_size, 1, 1];
-        let block = [block_size, 1, 1];
-        unsafe {
-            device()?.launch(
-                &runtime()?.kernel(update_weights_kernel)?,
-                &[],
-                w1_grid,
-                block,
-                &[
-                    Argument::Buffer(&(&mut self.weights1).as_buffer()),
-                    Argument::Buffer(&(&self.grad_weights1).as_buffer()),
-                    Argument::Scalar(Literal::I32(w1_size as i32)),
-                ],
-            )
-        }?;
-
-        // Update weights2
-        let w2_size = OUTPUT_SIZE * HIDDEN_SIZE;
-        let w2_grid_size = (w2_size as u32).div_ceil(block_size);
-
-        let w2_grid = [w2_grid_size, 1, 1];
-        let block = [block_size, 1, 1];
-        unsafe {
-            device()?.launch(
-                &runtime()?.kernel(update_weights_kernel)?,
-                &[],
-                w2_grid,
-                block,
-                &[
-                    Argument::Buffer(&(&mut self.weights2).as_buffer()),
-                    Argument::Buffer(&(&self.grad_weights2).as_buffer()),
-                    Argument::Scalar(Literal::I32(w2_size as i32)),
-                ],
-            )
-        }?;
-
-        // Update bias1
-        let b1_grid_size = (HIDDEN_SIZE as u32).div_ceil(block_size);
-
-        let b1_grid = [b1_grid_size, 1, 1];
-        let block = [block_size, 1, 1];
-        unsafe {
-            device()?.launch(
-                &runtime()?.kernel(update_weights_kernel)?,
-                &[],
-                b1_grid,
-                block,
-                &[
-                    Argument::Buffer(&(&mut self.bias1).as_buffer()),
-                    Argument::Buffer(&(&self.grad_bias1).as_buffer()),
-                    Argument::Scalar(Literal::I32(HIDDEN_SIZE as i32)),
-                ],
-            )
-        }?;
-
-        // Update bias2
-        let b2_grid_size = (OUTPUT_SIZE as u32).div_ceil(block_size);
-
-        let b2_grid = [b2_grid_size, 1, 1];
-        let block = [block_size, 1, 1];
-        unsafe {
-            device()?.launch(
-                &runtime()?.kernel(update_weights_kernel)?,
-                &[],
-                b2_grid,
-                block,
-                &[
-                    Argument::Buffer(&(&mut self.bias2).as_buffer()),
-                    Argument::Buffer(&(&self.grad_bias2).as_buffer()),
-                    Argument::Scalar(Literal::I32(OUTPUT_SIZE as i32)),
-                ],
-            )
-        }?;
-
-        Ok(())
-    }
-}
-
-// Function to calculate cross-entropy loss for batches
-fn cross_entropy_loss(output: &[f32], labels: &[i32], batch_size: usize) -> f32 {
-    let mut total_loss = 0.0;
-
-    for b in 0..batch_size {
-        let label = labels[b] as usize;
-        if label < OUTPUT_SIZE {
-            // Clip to avoid log(0)
-            let prob = output[b * OUTPUT_SIZE + label].max(1e-15);
-            total_loss -= prob.ln();
-        }
-    }
-
-    total_loss / batch_size as f32
-}
-
-// Evaluate model accuracy
-fn evaluate_accuracy(
-    nn: &NeuralNetwork,
-    x_test: &[f32],
-    y_test: &[u8],
-    test_size: usize,
-) -> anyhow::Result<f32> {
-    let mut correct = 0;
-    let mut total = 0;
-
-    // Process in batches to avoid GPU memory issues
-    for batch_start in (0..test_size).step_by(BATCH_SIZE) {
-        let batch_end = (batch_start + BATCH_SIZE).min(test_size);
-        let current_batch_size = batch_end - batch_start;
-
-        // Prepare batch data
-        let mut batch_x = vec![0.0; current_batch_size * INPUT_SIZE];
-        let mut batch_y = vec![0; current_batch_size];
-
-        for i in 0..current_batch_size {
-            for j in 0..INPUT_SIZE {
-                batch_x[i * INPUT_SIZE + j] = x_test[(batch_start + i) * INPUT_SIZE + j];
-            }
-            batch_y[i] = y_test[batch_start + i];
-        }
-
-        // Copy to GPU
-        let d_input = GpuArray::from_iter(batch_x)?;
-        let mut d_hidden = GpuArray::from_iter(vec![0.0; current_batch_size * HIDDEN_SIZE])?;
-        let mut d_output = GpuArray::from_iter(vec![0.0; current_batch_size * OUTPUT_SIZE])?;
-
-        // Forward pass
-        nn.forward(&d_input, &mut d_hidden, &mut d_output, current_batch_size)?;
-
-        // Copy output back to CPU for evaluation
-        let output = d_output.to_vec()?;
-
-        // Count correct predictions
-        for i in 0..current_batch_size {
-            let mut max_idx = 0;
-            let mut max_val = output[i * OUTPUT_SIZE];
-
-            for j in 1..OUTPUT_SIZE {
-                if output[i * OUTPUT_SIZE + j] > max_val {
-                    max_val = output[i * OUTPUT_SIZE + j];
-                    max_idx = j;
-                }
-            }
-
-            if max_idx as i32 == batch_y[i] as i32 {
-                correct += 1;
-            }
-            total += 1;
-        }
-    }
-
-    Ok(100.0 * correct as f32 / total as f32)
-}
-
-// Train the neural network
-pub fn train_mnist() -> anyhow::Result<()> {
-    println!("Loading MNIST dataset...");
-
-    // Load MNIST dataset
-    let mnist = MnistBuilder::new()
-        .base_path("./data")
-        .training_set_length(60000)
-        .test_set_length(10000)
-        .finalize()
-        .normalize();
-
-    // Preprocess data
-    let train_size = mnist.trn_lbl.len();
-    let test_size = mnist.tst_lbl.len();
-
-    println!("Training set size: {}", train_size);
-    println!("Test set size: {}", test_size);
-
-    // Create neural network
-    let mut nn = NeuralNetwork::new()?;
-
-    println!("Starting training...");
-    let start_time = Instant::now();
-
-    // Training loop
-    for epoch in 0..EPOCHS {
-        let mut total_loss = 0.0;
-        let mut batch_count = 0;
-
-        let bar = ProgressBar::new((train_size / BATCH_SIZE) as u64);
-        // Process in batches
-        for batch_start in (0..train_size).step_by(BATCH_SIZE) {
-            bar.inc(1);
-            let batch_end = (batch_start + BATCH_SIZE).min(train_size);
-            let current_batch_size = batch_end - batch_start;
-
-            // Prepare batch data
-            let mut batch_x = vec![0.0; current_batch_size * INPUT_SIZE];
-            let mut batch_y = vec![0; current_batch_size];
-
-            //println!("Started data normalization");
-            for i in 0..current_batch_size {
-                for j in 0..INPUT_SIZE {
-                    batch_x[i * INPUT_SIZE + j] =
-                        mnist.trn_img[(batch_start + i) * INPUT_SIZE + j] / 255.0;
-                }
-                batch_y[i] = mnist.trn_lbl[batch_start + i] as i32;
-            }
-            //println!("end data normalization");
-
-            // Copy to GPU
-            let d_input = GpuArray::from_iter(batch_x.iter().cloned())?;
-            let d_labels = GpuArray::from_iter(batch_y.iter().cloned())?;
-            let mut d_hidden = GpuArray::from_iter(vec![0.0; current_batch_size * HIDDEN_SIZE])?;
-            let mut d_output = GpuArray::from_iter(vec![0.0; current_batch_size * OUTPUT_SIZE])?;
-
-            // Forward pass
-            //println!("Started forward pass");
-            nn.forward(&d_input, &mut d_hidden, &mut d_output, current_batch_size)?;
-            //println!("Finished forward pass");
-
-            // Calculate loss
-            let output = d_output.to_vec()?;
-            let loss = cross_entropy_loss(&output, &batch_y, current_batch_size);
-            total_loss += loss;
-            batch_count += 1;
-
-            // Backward pass
-            nn.backward(
-                &d_input,
-                &d_hidden,
-                &d_output,
-                &d_labels,
-                current_batch_size,
-            )?;
-
-            // Update weights
-            nn.update_weights()?;
-        }
-
-        // Calculate average loss for this epoch
-        let avg_loss = total_loss / batch_count as f32;
-
-        // Evaluate accuracy on test set
-        let accuracy = evaluate_accuracy(&nn, &mnist.tst_img, &mnist.tst_lbl, test_size)?;
-
-        println!(
-            "Epoch {}/{}: loss = {:.4}, accuracy = {:.2}%",
-            epoch + 1,
-            EPOCHS,
-            avg_loss,
-            accuracy
-        );
-    }
-
-    let elapsed = start_time.elapsed();
-    println!("Training completed in {:.2?}", elapsed);
-
-    // Final evaluation
-    let final_accuracy = evaluate_accuracy(&nn, &mnist.tst_img, &mnist.tst_lbl, test_size)?;
-    println!("Final test accuracy: {:.2}%", final_accuracy);
-
     Ok(())
+}
+
+fn dataset() -> Result<(Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>), Error> {
+    let base = std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/data"));
+    fn read(
+        base: &std::path::Path,
+        name: &str,
+        images: bool,
+        count: usize,
+    ) -> Result<Vec<u8>, Error> {
+        let data = std::fs::read(base.join(name))?;
+        let header = if images { 16 } else { 8 };
+        let word = |i| u32::from_be_bytes(data[i..i + 4].try_into().unwrap()) as usize;
+        if data.len() < header
+            || word(0) != if images { 2051 } else { 2049 }
+            || word(4) != count
+            || (images && (word(8) != 28 || word(12) != 28))
+            || data.len() != header + count * if images { INPUT } else { 1 }
+        {
+            return Err(format!("invalid IDX file: {name}").into());
+        }
+        let out = data[header..].to_vec();
+        if !images && out.iter().any(|v| *v >= 10) {
+            return Err("invalid label".into());
+        }
+        Ok(out)
+    }
+    Ok((
+        read(base, "train-images-idx3-ubyte", true, 60000)?,
+        read(base, "train-labels-idx1-ubyte", false, 60000)?,
+        read(base, "t10k-images-idx3-ubyte", true, 10000)?,
+        read(base, "t10k-labels-idx1-ubyte", false, 10000)?,
+    ))
+}
+
+pub fn evaluate(model: &Model, images: &[u8], labels: &[u8]) -> Result<f64, Error> {
+    let mut correct = 0;
+    for start in (0..labels.len()).step_by(256) {
+        let end = (start + 256).min(labels.len());
+        let x = images[start * INPUT..end * INPUT]
+            .iter()
+            .map(|p| *p as f32 / 255.0)
+            .collect::<Vec<_>>();
+        let a = model.forward(GpuArray::from_slice(&x)?, end - start)?;
+        let logits = a.last().unwrap().to_vec()?;
+        for (row, score) in logits.chunks_exact(OUTPUT).enumerate() {
+            let p = probabilities(score)?;
+            let prediction = p
+                .iter()
+                .enumerate()
+                .max_by(|a, b| a.1.total_cmp(b.1))
+                .unwrap()
+                .0;
+            correct += usize::from(prediction == labels[start + row] as usize);
+        }
+    }
+    Ok(correct as f64 / labels.len() as f64)
+}
+
+pub fn predict_file(path: &str) -> Result<(), Error> {
+    let model = Model::from_value(&serde_json::from_slice(&std::fs::read(path)?)?)?;
+    let (_, _, images, labels) = dataset()?;
+    println!(
+        "Full MNIST test accuracy: {:.2}% (10,000 images)",
+        evaluate(&model, &images, &labels)? * 100.0
+    );
+    Ok(())
+}
+
+fn snapshot(model: &Model) -> Result<Value, Error> {
+    let layers=model.layers.iter().map(|l| Ok(json!({"inputs":l.inputs,"outputs":l.outputs,"weights":l.weights.to_vec()?,"bias":l.bias.to_vec()?}))).collect::<Result<Vec<_>,Error>>()?;
+    Ok(json!({"format_version":2,"layers":layers}))
+}
+
+pub fn train_mnist() -> Result<(), Error> {
+    let epochs = std::env::var("MNIST_EPOCHS")
+        .unwrap_or_else(|_| "30".into())
+        .parse::<usize>()?;
+    if epochs == 0 {
+        return Err("MNIST_EPOCHS must be positive".into());
+    }
+    let output = std::env::var("MNIST_OUTPUT").unwrap_or_else(|_| "mnist-model.json".into());
+    let seed = std::env::var("MNIST_SEED")
+        .unwrap_or_else(|_| "42".into())
+        .parse::<u64>()?;
+    let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
+    let (images, labels, test_images, test_labels) = dataset()?;
+    let mut split = (0..60000).collect::<Vec<usize>>();
+    split.shuffle(&mut rng);
+    let (validation, training) = split.split_at(5000);
+    let val_images = validation
+        .iter()
+        .flat_map(|i| images[i * INPUT..(i + 1) * INPUT].iter().copied())
+        .collect::<Vec<_>>();
+    let val_labels = validation.iter().map(|i| labels[*i]).collect::<Vec<_>>();
+    let mut training = training.to_vec();
+    let dims = [INPUT, 512, 128, OUTPUT];
+    let layers=dims.windows(2).map(|d| {
+        let scale=(6.0/d[0] as f32).sqrt();
+        json!({"inputs":d[0],"outputs":d[1],"weights":(0..d[0]*d[1]).map(|_|rng.random_range(-scale..scale)).collect::<Vec<f32>>(),"bias":vec![0.0f32;d[1]]})
+    }).collect::<Vec<_>>();
+    let model = Model::from_value(&json!({"format_version":2,"layers":layers}))?;
+    let optim = model
+        .layers
+        .iter()
+        .map(|l| {
+            Ok(Optimizer {
+                dw: zeros(l.inputs * l.outputs)?,
+                db: zeros(l.outputs)?,
+                mw: zeros(l.inputs * l.outputs)?,
+                vw: zeros(l.inputs * l.outputs)?,
+                mb: zeros(l.outputs)?,
+                vb: zeros(l.outputs)?,
+            })
+        })
+        .collect::<Result<Vec<_>, Error>>()?;
+    let start = Instant::now();
+    let mut step = 0;
+    let mut best = 0.0;
+    let mut checkpoint: Option<Value> = None;
+    println!(
+        "Training 784 → 512 → 128 → 10; Adam; 55,000 training / 5,000 validation; seed {seed}"
+    );
+    for epoch in 0..epochs {
+        training.shuffle(&mut rng);
+        let lr = if epoch < 10 {
+            0.001f32
+        } else if epoch < 20 {
+            0.0003
+        } else {
+            0.0001
+        };
+        for indices in training.chunks(BATCH) {
+            let mut x = Vec::with_capacity(indices.len() * INPUT);
+            let mut y = Vec::with_capacity(indices.len());
+            for &i in indices {
+                // Translation augmentation helps drawings that are slightly off center.
+                let dx = rng.random_range(-2i32..=2);
+                let dy = rng.random_range(-2i32..=2);
+                for row in 0..28i32 {
+                    for col in 0..28i32 {
+                        let sx = col - dx;
+                        let sy = row - dy;
+                        x.push(if (0..28).contains(&sx) && (0..28).contains(&sy) {
+                            images[i * INPUT + (sy * 28 + sx) as usize] as f32 / 255.0
+                        } else {
+                            0.0
+                        });
+                    }
+                }
+                y.push(labels[i] as i32);
+            }
+            step += 1;
+            train_batch(&model, &optim, x, &y, step, lr)?;
+        }
+        let accuracy = evaluate(&model, &val_images, &val_labels)?;
+        println!(
+            "Epoch {}/{} · validation {:.2}% · elapsed {:.1}s",
+            epoch + 1,
+            epochs,
+            accuracy * 100.0,
+            start.elapsed().as_secs_f64()
+        );
+        if accuracy > best {
+            best = accuracy;
+            checkpoint = Some(snapshot(&model)?);
+        }
+    }
+    let mut checkpoint = checkpoint.ok_or("training did not produce a valid checkpoint")?;
+    let best_model = Model::from_value(&checkpoint)?;
+    let test = evaluate(&best_model, &test_images, &test_labels)?;
+    println!(
+        "Best validation: {:.2}%; full test accuracy: {:.2}%",
+        best * 100.0,
+        test * 100.0
+    );
+    if test < 0.95 {
+        return Err(format!(
+            "test accuracy {:.2}% is below 95%; existing output was not replaced",
+            test * 100.0
+        )
+        .into());
+    }
+    checkpoint["metrics"] = json!({"validation_accuracy":best,"test_accuracy":test,"test_samples":10000,"seed":seed,"epochs":epochs});
+    let temp = format!("{output}.tmp");
+    std::fs::write(&temp, serde_json::to_vec(&checkpoint)?)?;
+    std::fs::rename(temp, &output)?;
+    println!("Saved qualified model to {output}");
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    #[ignore = "requires a compute device"]
+    fn relu_backward_preserves_negative_gradients_for_active_neurons() -> Result<(), Error> {
+        let grad = GpuArray::from_slice(&[-2.0f32, -3.0])?;
+        let weights = GpuArray::from_slice(&[1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0])?;
+        let activation = GpuArray::from_slice(&[2.0f32, -3.0, 0.0])?;
+        let previous = zeros(3)?;
+        unsafe {
+            launch!(backward<<<[1,1,1],[32,1,1]>>>(&grad,&weights,&activation,&previous,3,2,3))?;
+        }
+        assert_eq!(previous.to_vec()?, vec![-8.0, 0.0, 0.0]);
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "requires a compute device"]
+    fn output_gradient_averages_batch_and_subtracts_correct_label() -> Result<(), Error> {
+        let logits = zeros(20)?;
+        let labels = GpuArray::from_slice(&[3i32, 7])?;
+        let grad = zeros(20)?;
+        unsafe {
+            launch!(output_gradient<<<[1,1,1],[32,1,1]>>>(&logits,&labels,&grad,2))?;
+        }
+        let actual = grad.to_vec()?;
+        for (i, value) in actual.into_iter().enumerate() {
+            let expected = if i == 3 || i == 17 { -0.45 } else { 0.05 };
+            assert!((value - expected).abs() < 1e-6);
+        }
+        Ok(())
+    }
 }
