@@ -1,4 +1,6 @@
 #[cfg(feature = "backend")]
+mod erosion;
+#[cfg(feature = "backend")]
 mod gpu;
 #[cfg(feature = "backend")]
 mod mnist;
@@ -230,6 +232,45 @@ fn serve(mut stream: TcpStream, ui: bool, config: &Config) -> Result<(), Error> 
             include_str!("teach.js"),
         )?);
     }
+    if ui && method == "GET" && path == "/erosion.js" {
+        return Ok(response(
+            &mut stream,
+            "200 OK",
+            "text/javascript; charset=utf-8",
+            include_str!("erosion.js"),
+        )?);
+    }
+    if ui && method == "POST" && path.starts_with("/sim/") {
+        let parts = path
+            .trim_start_matches("/sim/")
+            .split('/')
+            .collect::<Vec<_>>();
+        let start = std::time::Instant::now();
+        let result = (|| -> Result<Value, Error> {
+            if parts.len() != 2
+                || !["erosion-create", "erosion-step", "erosion-compare"].contains(&parts[1])
+            {
+                return Err("unknown simulation operation".into());
+            }
+            let target = parts[0]
+                .parse::<usize>()
+                .ok()
+                .and_then(|i| config.targets.get(i))
+                .ok_or("unknown target")?;
+            remote(target, "POST", parts[1], &serde_json::from_slice(&payload)?)
+        })();
+        let (status, mut value) = match result {
+            Ok(value) => ("200 OK", value),
+            Err(e) => ("503 Service Unavailable", json!({"error":e.to_string()})),
+        };
+        value["proxy_ms"] = json!(start.elapsed().as_secs_f64() * 1000.0);
+        return Ok(response(
+            &mut stream,
+            status,
+            "application/json",
+            &value.to_string(),
+        )?);
+    }
     if ui && path.starts_with("/run/") {
         let parts: Vec<_> = path.trim_start_matches("/run/").split('/').collect();
         if parts.len() == 2
@@ -321,6 +362,9 @@ fn serve(mut stream: TcpStream, ui: bool, config: &Config) -> Result<(), Error> 
             "/api/mnist",
             "/api/teach-train",
             "/api/teach-predict",
+            "/api/erosion-create",
+            "/api/erosion-step",
+            "/api/erosion-compare",
         ]
         .contains(&path)
     {

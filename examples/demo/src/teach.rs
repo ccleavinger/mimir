@@ -1,18 +1,22 @@
 //! A small, session-scoped webcam classifier trained entirely through Mimir kernels.
 use super::Error;
 use mimir::{launch, mimir_global, GpuArray};
+use parking_lot::Mutex;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Instant;
+
 const INPUT: usize = 32 * 32 * 3;
 const HIDDEN: usize = 64;
 const EPOCHS: usize = 150;
 static NEXT: AtomicU64 = AtomicU64::new(1);
 static MODELS: Mutex<BTreeMap<u64, Arc<Classifier>>> = Mutex::new(BTreeMap::new());
+
 // Avoid concurrent training runs contending for the same demo device.
 static TRAINING: Mutex<()> = Mutex::new(());
+
 struct Classifier {
     names: Vec<String>,
     w1: GpuArray<f32>,
@@ -20,9 +24,11 @@ struct Classifier {
     w2: GpuArray<f32>,
     b2: GpuArray<f32>,
 }
+
 fn array(data: &[f32]) -> Result<GpuArray<f32>, Error> {
     Ok(GpuArray::from_slice(data)?)
 }
+
 fn zeros(n: usize) -> Result<GpuArray<f32>, Error> {
     array(&vec![0.0; n])
 }
@@ -52,6 +58,7 @@ fn dense(
         y[i] = sum;
     }
 }
+
 #[mimir_global]
 fn softmax_gradient(logits: &[f32], labels: &[i32], grad: &mut [f32], batch: i32, classes: i32) {
     let row = (block_idx.x * block_dim.x + thread_idx.x) as i32;
@@ -73,6 +80,7 @@ fn softmax_gradient(logits: &[f32], labels: &[i32], grad: &mut [f32], batch: i32
         }
     }
 }
+
 #[mimir_global]
 fn backward(
     grad: &[f32],
@@ -96,6 +104,7 @@ fn backward(
         previous[i] = v;
     }
 }
+
 #[mimir_global]
 fn gradients(
     x: &[f32],
@@ -124,6 +133,7 @@ fn gradients(
         db[i] = v;
     }
 }
+
 #[mimir_global]
 fn update(
     w: &mut [f32],
@@ -145,11 +155,13 @@ fn update(
         w[i] -= lr * (m / c1) / (sqrt(s / c2) + 0.00000001);
     }
 }
+
 struct Adam {
     grad: GpuArray<f32>,
     mean: GpuArray<f32>,
     variance: GpuArray<f32>,
 }
+
 impl Adam {
     fn new(n: usize) -> Result<Self, Error> {
         Ok(Self {
@@ -158,6 +170,7 @@ impl Adam {
             variance: zeros(n)?,
         })
     }
+
     fn step(&self, w: &GpuArray<f32>, epoch: usize) -> Result<(), Error> {
         let n = w.len();
         let lr = if epoch < 75 { 0.001f32 } else { 0.0003 };
@@ -168,6 +181,7 @@ impl Adam {
         Ok(())
     }
 }
+
 impl Classifier {
     fn forward(
         &self,
@@ -184,6 +198,7 @@ impl Classifier {
         }
         Ok(())
     }
+
     fn scores(&self, pixels: &[f32]) -> Result<Vec<f32>, Error> {
         let x = array(pixels)?;
         let hidden = zeros(HIDDEN)?;
@@ -191,6 +206,7 @@ impl Classifier {
         self.forward(&x, &hidden, &out, 1)?;
         probabilities(&out.to_vec()?)
     }
+
     fn accuracy(&self, x: &[f32], labels: &[usize]) -> Result<f64, Error> {
         let input = array(x)?;
         let hidden = zeros(labels.len() * HIDDEN)?;
@@ -213,6 +229,7 @@ impl Classifier {
         Ok(correct as f64 / labels.len() as f64)
     }
 }
+
 fn probabilities(scores: &[f32]) -> Result<Vec<f32>, Error> {
     if scores.iter().any(|v| !v.is_finite()) {
         return Err("Training diverged; collect more varied examples and retrain.".into());
@@ -222,6 +239,7 @@ fn probabilities(scores: &[f32]) -> Result<Vec<f32>, Error> {
     let sum: f32 = p.iter().sum();
     Ok(p.into_iter().map(|v| v / sum).collect())
 }
+
 fn pixels(value: &Value) -> Result<Vec<f32>, Error> {
     let p = value.as_array().ok_or("expected RGB image pixels")?;
     if p.len() != INPUT {
@@ -236,6 +254,7 @@ fn pixels(value: &Value) -> Result<Vec<f32>, Error> {
         })
         .collect()
 }
+
 struct Dataset {
     names: Vec<String>,
     x: Vec<f32>,
@@ -244,6 +263,7 @@ struct Dataset {
     validation_y: Vec<usize>,
     samples: usize,
 }
+
 fn dataset(args: &Value) -> Result<Dataset, Error> {
     let classes = args["classes"].as_array().ok_or("missing classes")?;
     if !(2..=4).contains(&classes.len()) {
@@ -288,10 +308,9 @@ fn dataset(args: &Value) -> Result<Dataset, Error> {
     }
     Ok(data)
 }
+
 fn train(args: &Value) -> Result<Value, Error> {
-    let _training = TRAINING
-        .try_lock()
-        .map_err(|_| "Another training run is active on this backend. Try again shortly.")?;
+    let _training = TRAINING.lock();
     let data = dataset(args)?;
     let classes = data.names.len();
     let batch = data.y.len();
@@ -342,7 +361,7 @@ fn train(args: &Value) -> Result<Value, Error> {
     let validation = model.accuracy(&data.validation_x, &data.validation_y)?;
     let id = NEXT.fetch_add(1, Ordering::Relaxed);
     let response = json!({"model":id,"names":model.names,"training_accuracy":training,"validation_accuracy":validation,"samples":data.samples,"epochs":EPOCHS,"elapsed_ms":start.elapsed().as_secs_f64()*1000.0});
-    let mut models = MODELS.lock().map_err(|_| "model store unavailable")?;
+    let mut models = MODELS.lock();
     models.insert(id, Arc::new(model));
     while models.len() > 8 {
         models.pop_first();
@@ -356,7 +375,6 @@ pub fn run(path: &str, args: &Value) -> Result<Value, Error> {
     let id = args["model"].as_u64().ok_or("missing model id")?;
     let model = MODELS
         .lock()
-        .map_err(|_| "model store unavailable")?
         .get(&id)
         .cloned()
         .ok_or("This model has expired or the backend restarted. Train again.")?;

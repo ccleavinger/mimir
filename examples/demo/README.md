@@ -1,6 +1,6 @@
 # Mimir GPU demo
 
-The HTMX interface uses parchment colors, serif titles and four demo tabs.
+The HTMX interface uses parchment colors, serif titles and five demo tabs.
 Fractal forge and photo blur produce actual images on the selected GPU.
 MNIST drawing runs dense-network inference on the selected GPU. The webcam lesson trains a small image classifier on the selected GPU.
 
@@ -131,3 +131,61 @@ Only one training run per backend runs at a time; another receives a busy error.
 browser form values and return HTMX fragments. Live scores are labeled with
 class names rather than printing raw JSON. Invalid/expired models require a
 new training run; the UI displays the error and stops live requests.
+
+## Terrain erosion and CPU comparison
+
+**Terrain erosion** creates a deterministic landscape on the selected backend.
+Choose a 128², 256², or 512² (default) grid and a seed, then create terrain. Run
+rainfall, pause, or advance 64 steps. Rainfall strength can change during the
+simulation. Raised-terrain and overhead views are rendered locally from the same
+preview. Brown/orange highlights exposed soil, sand highlights deposits, and
+blue shows water. Original and current terrain remain visible side by side.
+
+This is a simplified hydraulic erosion model: one pass computes four downhill
+water outflows per cell, constrained by available water. A second transports
+water and sediment, erodes/deposits according to flow and local slope, and
+evaporates water. Boundaries are closed. Terrain plus sediment is conserved
+apart from floating-point error. The model is intended for a visual compute
+demo, not geophysical prediction or an interacting particle solver.
+
+The backend retains state, scratch space and flux buffers on the GPU. Each
+preview averages the full grid down to 64² cells and returns one-byte heights
+and water amounts as hexadecimal strings: about 16 KiB plus metadata, independent
+of simulation grid size. The browser projects this into terrain views. A single
+request advances 64 steps, then pauses 800 ms before the next request; requests
+never overlap. Leaving the tab, hiding the page, changing backend or encountering
+a connection error pauses the loop. The last preview remains visible on errors.
+The simulation advances only on requests and does not run in the background.
+Up to four simulations per backend remain in memory; restart or eviction requires
+creating terrain again. Changing backend requires a new terrain on that target.
+
+**Compare CPU / GPU** pauses the animation and copies the current state into
+independent GPU and single-thread CPU buffers. Both execute the same 64 steps
+with identical rainfall; the live terrain is not changed. The CPU uses scalar
+f32 loops with matching boundaries and equations, without a numerical library.
+The comparison checks all full-resolution height, water and sediment values
+before preview quantization, reporting maximum absolute error and RMS error.
+The displayed pass tolerance is 0.002 in normalized simulation units.
+
+GPU pipelines are warmed on scratch data. GPU timing covers synchronous launches
+and submission overhead; CPU timing covers the scalar simulation loop. Both
+exclude allocation and input cloning. GPU readback is shown separately. The
+whole request timing includes GPU/CPU work, readback, serialization and network
+latency, and is not presented as pure Wi-Fi latency. Both computations run on
+the selected backend machine. The UI reports the actual ratio even if CPU wins;
+these single measurements are illustrative, not a hardware benchmark suite.
+Use release builds for a meaningful CPU comparison.
+
+API endpoints (JSON):
+
+- `POST /api/erosion-create`: `{ "size": 256, "seed": 42, "rain": 0.002 }`.
+- `POST /api/erosion-step`: `{ "simulation": ID, "steps": 64, "rain": 0.002 }`.
+- `POST /api/erosion-compare`: same arguments as step, with no live-state change.
+
+Size is 128/256/512, seed is u32, steps are 1–128 and rain is 0–0.01. Create/step
+return simulation ID, total steps, size, seed, 64² preview dimensions, height and
+water hex strings, `gpu_ms` and `readback_ms`. Comparison returns `cpu_ms`,
+`gpu_ms`, `speedup` (CPU time / GPU time), `readback_ms`, maximum terrain/all-state
+errors, RMS error, tolerance, and pass/fail. The UI's `/sim/{target}/{operation}`
+JSON gateway forwards to the API and adds `proxy_ms`. Browser timings measure
+the whole request; preview payload size is measured from the response bytes.
