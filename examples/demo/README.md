@@ -2,7 +2,7 @@
 
 The HTMX interface uses parchment colors, serif titles and four demo tabs.
 Fractal forge and photo blur produce actual images on the selected GPU.
-MNIST drawing runs dense-network inference on the selected GPU. Image training remains a placeholder.
+MNIST drawing runs dense-network inference on the selected GPU. The webcam lesson trains a small image classifier on the selected GPU.
 
 ```sh
 # Laptop: website on :8080, Vulkan API on :8081
@@ -53,7 +53,7 @@ errors return JSON with status 503. This is a trusted-network demo without auth.
 
 ## MNIST inference
 
-Place the trained model from `mnist-cnn` at
+Place the trained model from `mnist` at
 `examples/demo/assets/mnist-model.json` on each backend machine before starting.
 The backend loads it once, checks connected layer shapes (784 inputs, 10 outputs), parameter
 counts and finite values, and uploads weights before opening any listening ports.
@@ -80,10 +80,54 @@ is supported alongside existing version 1 models. To train and replace the demo
 asset only after passing 95% on the held-out MNIST test set:
 
 ```sh
-MNIST_OUTPUT=examples/demo/assets/mnist-model.json cargo run -p mnist-cnn --release
+MNIST_OUTPUT=examples/demo/assets/mnist-model.json cargo run -p mnist --release
 ```
 
-See `examples/mnist-cnn/README.md` for training settings. Restart backend services
+See `examples/mnist/README.md` for training settings. Restart backend services
 after replacing the asset; models are loaded once at startup. Copy the qualified
 asset to the same demo assets directory on the Jetson as well. MNIST test accuracy
 does not guarantee the same accuracy for freehand drawings.
+
+## Webcam lesson
+
+Open **Teach images**, start the camera, and name two to four classes. Capture
+10–60 frames per class using single capture or ten-frame bursts, moving the
+object between views. The cards show recent thumbnails; Undo, Clear and Remove
+let you correct the collection. Include a background/empty-hand class if useful.
+Press **Train on GPU**, then enable **Live predictions** to see class scores.
+Add more varied examples and retrain when the model confuses classes.
+
+The preview is a mirrored center square. Training and prediction use exactly
+that crop, resized to 32×32 RGB. A 3072 → 64 → class-count dense network trains
+from scratch with Adam for 150 full-batch epochs through Mimir. Training is
+synchronous with a busy indicator. Every fifth frame is withheld for a quick
+validation score; adjacent frames are correlated, so this is not a measure of
+recognition in new environments. Use visibly distinct objects or poses with
+similar backgrounds and lighting to those captured. No pretrained image model
+or extra asset download is needed.
+
+The browser handles camera permission and capture. Use localhost (including
+`127.0.0.1`) or HTTPS for browser camera access. Opening the website over a plain
+HTTP LAN IP generally disables getUserMedia. The existing SSH forwarding setup
+keeps the UI on laptop localhost and can send training to Jetson.
+
+Only captured samples and live inference frames are sent to the selected
+backend. Live requests run one at a time, with a 350ms pause between responses.
+Turning off the camera, leaving the tab or closing the page stops capture.
+Examples remain in browser memory until reset/reload. Editing examples or
+changing backend invalidates the selected model and requires retraining.
+Models stay only in backend memory: each backend retains its latest eight,
+existing lookups retain their model during inference, and restart clears them.
+Only one training run per backend runs at a time; another receives a busy error.
+
+- `POST /api/teach-train`: JSON `{ "classes": [{ "name": "Cup", "samples": [[...3072 RGB bytes...], ...] }, ...] }`.
+  Requires 2–4 unique named classes and 10–60 samples each. Returns `model` (a
+  backend-local ID), `names`, `samples`, `epochs`, `training_accuracy`,
+  `validation_accuracy` and `elapsed_ms`.
+- `POST /api/teach-predict`: JSON `{ "model": ID, "pixels": [...3072 RGB bytes...] }`.
+  Returns `names`, `scores`, `winner` (class index), and `elapsed_ms`.
+
+`/run/{target}/teach-train` and `/run/{target}/teach-predict` accept corresponding
+browser form values and return HTMX fragments. Live scores are labeled with
+class names rather than printing raw JSON. Invalid/expired models require a
+new training run; the UI displays the error and stops live requests.

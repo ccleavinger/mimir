@@ -59,6 +59,9 @@ fn blur(input: &[f32], out: &mut [f32], width: i32, height: i32, radius: i32, ho
 }
 
 pub fn run(path: &str, args: &Value) -> Result<Value, Error> {
+    if path.starts_with("/api/teach-") {
+        return super::teach::run(path, args);
+    }
     if path == "/api/mnist" {
         return super::mnist::predict(args);
     }
@@ -67,7 +70,7 @@ pub fn run(path: &str, args: &Value) -> Result<Value, Error> {
         return Ok(
             json!({"devices": devices.iter().map(|d| d.name()).collect::<Vec<_>>(),
             "backend": if cfg!(feature="cuda") { "CUDA" } else if cfg!(feature="vulkan") { "Vulkan" } else { "none" },
-            "demos": ["fractal", "blur", "mnist"]}),
+            "demos": ["fractal", "blur", "mnist", "teach"]}),
         );
     }
     let start = Instant::now();

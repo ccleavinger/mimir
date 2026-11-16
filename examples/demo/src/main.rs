@@ -2,6 +2,8 @@
 mod gpu;
 #[cfg(feature = "backend")]
 mod mnist;
+#[cfg(feature = "backend")]
+mod teach;
 use serde_json::{json, Value};
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream, ToSocketAddrs};
@@ -220,9 +222,27 @@ fn serve(mut stream: TcpStream, ui: bool, config: &Config) -> Result<(), Error> 
         )?);
     }
 
+    if ui && method == "GET" && path == "/teach.js" {
+        return Ok(response(
+            &mut stream,
+            "200 OK",
+            "text/javascript; charset=utf-8",
+            include_str!("teach.js"),
+        )?);
+    }
     if ui && path.starts_with("/run/") {
         let parts: Vec<_> = path.trim_start_matches("/run/").split('/').collect();
-        if parts.len() == 2 && ["status", "fractal", "blur", "mnist"].contains(&parts[1]) {
+        if parts.len() == 2
+            && [
+                "status",
+                "fractal",
+                "blur",
+                "mnist",
+                "teach-train",
+                "teach-predict",
+            ]
+            .contains(&parts[1])
+        {
             let expected = if parts[1] == "status" { "GET" } else { "POST" };
             if method != expected {
                 return Ok(response(
@@ -240,7 +260,17 @@ fn serve(mut stream: TcpStream, ui: bool, config: &Config) -> Result<(), Error> 
                 .and_then(|t| remote(t, &method, parts[1], &form_args(&payload)?));
             let body = match result {
                 Ok(value) => {
-                    if let Some(prediction) = value["prediction"].as_u64() {
+                    if let Some(id) = value["model"].as_u64() {
+                        format!("<div data-teach-model=\"{id}\"><h3>Ready to recognize</h3><p>Trained on {} images in {:.1}s · {} epochs.</p><p>Training score: {:.1}% · Held-back capture score: {:.1}%</p><p>Try new poses and lighting. Neighboring webcam frames are similar, so this score is only a quick check.</p></div>",value["samples"],value["elapsed_ms"].as_f64().unwrap_or(0.0)/1000.0,value["epochs"],value["training_accuracy"].as_f64().unwrap_or(0.0)*100.0,value["validation_accuracy"].as_f64().unwrap_or(0.0)*100.0)
+                    } else if let Some(names) = value["names"].as_array() {
+                        let winner = value["winner"].as_u64().unwrap_or(0) as usize;
+                        let scores = value["scores"].as_array().ok_or("missing scores")?;
+                        let bars = names.iter().zip(scores).map(|(name,score)| {
+                            let pct=score.as_f64().unwrap_or(0.0)*100.0;
+                            format!("<div class=\"teach-score\"><span>{}</span><meter min=\"0\" max=\"100\" value=\"{pct:.2}\">{pct:.1}%</meter><span>{pct:.1}%</span></div>",escape(name.as_str().unwrap_or("")))
+                        }).collect::<String>();
+                        format!("<div data-teach-prediction><div class=\"eyebrow\">I see</div><h3>{}</h3>{bars}<p>{:.1} ms on backend</p></div>",escape(names.get(winner).and_then(|v|v.as_str()).unwrap_or("Unknown")),value["elapsed_ms"].as_f64().unwrap_or(0.0))
+                    } else if let Some(prediction) = value["prediction"].as_u64() {
                         let scores = value["probabilities"]
                             .as_array()
                             .ok_or("missing probabilities")?;
@@ -283,7 +313,17 @@ fn serve(mut stream: TcpStream, ui: bool, config: &Config) -> Result<(), Error> 
     }
 
     #[cfg(feature = "backend")]
-    if !ui && ["/api/status", "/api/fractal", "/api/blur", "/api/mnist"].contains(&path) {
+    if !ui
+        && [
+            "/api/status",
+            "/api/fractal",
+            "/api/blur",
+            "/api/mnist",
+            "/api/teach-train",
+            "/api/teach-predict",
+        ]
+        .contains(&path)
+    {
         let expected = if path == "/api/status" { "GET" } else { "POST" };
         if method != expected {
             return Ok(response(
