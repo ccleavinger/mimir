@@ -1,31 +1,56 @@
 #[cfg(feature = "backend")]
-use mimir::{launch, mimir_global, GpuArray};
-#[cfg(feature = "backend")]
-use serde_json::json;
-use serde_json::Value;
+mod gpu;
+use serde_json::{json, Value};
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream, ToSocketAddrs};
 use std::sync::Arc;
 use std::time::Duration;
-
 type Error = Box<dyn std::error::Error + Send + Sync>;
 
+// A BMP data URL keeps image transport self-contained without an image codec dependency.
 #[cfg(feature = "backend")]
-#[mimir_global]
-fn scale(values: &mut [f32], count: i32, factor: f32) {
-    let i = (block_idx.x * block_dim.x + thread_idx.x) as i32;
-    if i < count {
-        values[i] *= factor;
+fn bitmap(width: u32, height: u32, pixels: &[f32]) -> String {
+    let size = 54 + width * height * 4;
+    let mut bytes = Vec::with_capacity(size as usize);
+    bytes.extend_from_slice(b"BM");
+    for n in [size, 0, 54, 40, width, height] {
+        bytes.extend_from_slice(&n.to_le_bytes());
     }
-}
-
-#[cfg(feature = "backend")]
-#[mimir_global]
-fn effect(input: &[f32], output: &mut [f32], count: i32, amount: f32) {
-    let i = (block_idx.x * block_dim.x + thread_idx.x) as i32;
-    if i < count {
-        output[i] = input[i] * amount;
+    bytes.extend_from_slice(&[1, 0, 32, 0]);
+    for n in [0u32, width * height * 4, 2835, 2835, 0, 0] {
+        bytes.extend_from_slice(&n.to_le_bytes());
     }
+    for y in (0..height as usize).rev() {
+        for x in 0..width as usize {
+            let i = (y * width as usize + x) * 4;
+            bytes.extend_from_slice(&[
+                pixels[i + 2] as u8,
+                pixels[i + 1] as u8,
+                pixels[i] as u8,
+                255,
+            ]);
+        }
+    }
+    const TABLE: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::from("data:image/bmp;base64,");
+    for c in bytes.chunks(3) {
+        let n = ((c[0] as u32) << 16)
+            | ((c.get(1).copied().unwrap_or(0) as u32) << 8)
+            | c.get(2).copied().unwrap_or(0) as u32;
+        out.push(TABLE[((n >> 18) & 63) as usize] as char);
+        out.push(TABLE[((n >> 12) & 63) as usize] as char);
+        out.push(if c.len() > 1 {
+            TABLE[((n >> 6) & 63) as usize] as char
+        } else {
+            '='
+        });
+        out.push(if c.len() > 2 {
+            TABLE[(n & 63) as usize] as char
+        } else {
+            '='
+        });
+    }
+    out
 }
 
 #[derive(Clone)]
@@ -58,70 +83,84 @@ fn response(
     write!(stream, "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len())
 }
 
-// This demo accepts bodyless requests only. Read the complete header even when TCP splits it.
-fn request(stream: &mut TcpStream) -> Result<(String, String), Error> {
-    stream.set_read_timeout(Some(Duration::from_secs(5)))?;
-    stream.set_write_timeout(Some(Duration::from_secs(5)))?;
+// Content-Length framing is sufficient for browser form and demo API requests.
+fn request(stream: &mut TcpStream) -> Result<(String, String, Vec<u8>), Error> {
+    stream.set_read_timeout(Some(Duration::from_secs(30)))?;
+    stream.set_write_timeout(Some(Duration::from_secs(30)))?;
     let mut bytes = Vec::new();
-    let mut chunk = [0; 1024];
-    while !bytes.windows(4).any(|w| w == b"\r\n\r\n") {
+    let mut chunk = [0; 8192];
+    let end = loop {
+        if let Some(i) = bytes.windows(4).position(|w| w == b"\r\n\r\n") {
+            break i + 4;
+        }
         let n = stream.read(&mut chunk)?;
         if n == 0 {
             return Err("incomplete request".into());
         }
         bytes.extend_from_slice(&chunk[..n]);
-        if bytes.len() > 16384 {
-            return Err("request header too large".into());
+        if bytes.len() > 32768 {
+            return Err("header too large".into());
         }
-    }
-    let text = std::str::from_utf8(&bytes)?;
-    let mut parts = text
+    };
+    let header = std::str::from_utf8(&bytes[..end])?;
+    let mut parts = header
         .lines()
         .next()
         .ok_or("missing request")?
         .split_whitespace();
-    Ok((
-        parts.next().ok_or("missing method")?.into(),
-        parts.next().ok_or("missing path")?.into(),
-    ))
-}
-
-#[cfg(feature = "backend")]
-fn operation(path: &str) -> Result<Value, Error> {
-    match path {
-        "/api/status" => {
-            let devices = mimir::default_runtime()?.devices()?;
-            Ok(
-                json!({"devices": devices.iter().map(|d| d.name()).collect::<Vec<_>>(),
-                "backend": if cfg!(feature = "cuda") { "CUDA" } else if cfg!(feature = "vulkan") { "Vulkan" } else { "none" },
-                "demos": ["vector", "effect"]}),
-            )
-        }
-        "/api/vector" => {
-            let values = GpuArray::from_slice(&[1.0f32, 2.0, 3.0, 4.0])?;
-            let start = std::time::Instant::now();
-            // Four invocations access four distinct elements.
-            unsafe {
-                launch!(scale<<<[1, 1, 1], [4, 1, 1]>>>(&values, 4, 2.0))?;
-            }
-            Ok(
-                json!({"input": [1,2,3,4], "factor": 2, "output": values.to_vec()?, "elapsed_ms": start.elapsed().as_secs_f64()*1000.0}),
-            )
-        }
-        "/api/effect" => {
-            let input = GpuArray::from_slice(&[0.0f32, 0.25, 0.5, 0.75, 1.0])?;
-            let output = GpuArray::from_slice(&[0.0f32; 5])?;
-            // Five invocations read and write distinct in-bounds elements.
-            unsafe {
-                launch!(effect<<<[1, 1, 1], [5, 1, 1]>>>(&input, &output, 5, 0.8))?;
-            }
-            Ok(json!({"input": [0.0,0.25,0.5,0.75,1.0], "amount": 0.8, "output": output.to_vec()?}))
-        }
-        _ => Err("unknown operation".into()),
+    let method = parts.next().ok_or("missing method")?.to_owned();
+    let path = parts.next().ok_or("missing path")?.to_owned();
+    let length = header
+        .lines()
+        .filter_map(|l| l.split_once(':'))
+        .find(|(k, _)| k.eq_ignore_ascii_case("content-length"))
+        .map(|(_, v)| v.trim().parse::<usize>())
+        .transpose()?
+        .unwrap_or(0);
+    if length > 16 * 1024 * 1024 {
+        return Err("image request too large".into());
     }
+    while bytes.len() < end + length {
+        let n = stream.read(&mut chunk)?;
+        if n == 0 {
+            return Err("incomplete body".into());
+        }
+        bytes.extend_from_slice(&chunk[..n]);
+    }
+    Ok((method, path, bytes[end..end + length].to_vec()))
 }
 
-fn remote(target: &Target, method: &str, operation: &str) -> Result<Value, Error> {
+fn form_args(body: &[u8]) -> Result<Value, Error> {
+    let mut args = json!({});
+    for pair in std::str::from_utf8(body)?
+        .split('&')
+        .filter(|s| !s.is_empty())
+    {
+        let (k, v) = pair.split_once('=').ok_or("invalid form")?;
+        let mut decoded = Vec::new();
+        let mut i = 0;
+        let b = v.as_bytes();
+        while i < b.len() {
+            if b[i] == b'%' {
+                if i + 2 >= b.len() {
+                    return Err("invalid escape".into());
+                }
+                decoded.push(u8::from_str_radix(
+                    std::str::from_utf8(&b[i + 1..i + 3])?,
+                    16,
+                )?);
+                i += 3;
+            } else {
+                decoded.push(if b[i] == b'+' { b' ' } else { b[i] });
+                i += 1;
+            }
+        }
+        args[k] = serde_json::from_slice(&decoded)?;
+    }
+    Ok(args)
+}
+
+fn remote(target: &Target, method: &str, operation: &str, args: &Value) -> Result<Value, Error> {
     let addr = target
         .address
         .to_socket_addrs()?
@@ -130,9 +169,10 @@ fn remote(target: &Target, method: &str, operation: &str) -> Result<Value, Error
     let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(3))?;
     stream.set_read_timeout(Some(Duration::from_secs(30)))?;
     stream.set_write_timeout(Some(Duration::from_secs(5)))?;
-    write!(stream, "{method} /api/{operation} HTTP/1.1\r\nHost: {}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n", target.address)?;
+    let payload = args.to_string();
+    write!(stream, "{method} /api/{operation} HTTP/1.1\r\nHost: {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", target.address, payload.len(), payload)?;
     let mut bytes = Vec::new();
-    stream.take(1024 * 1024).read_to_end(&mut bytes)?;
+    stream.take(16 * 1024 * 1024).read_to_end(&mut bytes)?;
     let text = std::str::from_utf8(&bytes)?;
     let (headers, body) = text
         .split_once("\r\n\r\n")
@@ -145,7 +185,17 @@ fn remote(target: &Target, method: &str, operation: &str) -> Result<Value, Error
 }
 
 fn serve(mut stream: TcpStream, ui: bool, config: &Config) -> Result<(), Error> {
-    let (method, path) = request(&mut stream)?;
+    let (method, path, payload) = match request(&mut stream) {
+        Ok(request) => request,
+        Err(e) => {
+            return Ok(response(
+                &mut stream,
+                "400 Bad Request",
+                "application/json",
+                &json!({"error": e.to_string()}).to_string(),
+            )?)
+        }
+    };
     let path = path.split('?').next().unwrap_or(&path);
     if ui && method == "GET" && path == "/" {
         let options = config
@@ -163,7 +213,7 @@ fn serve(mut stream: TcpStream, ui: bool, config: &Config) -> Result<(), Error> 
     }
     if ui && path.starts_with("/run/") {
         let parts: Vec<_> = path.trim_start_matches("/run/").split('/').collect();
-        if parts.len() == 2 && ["status", "vector", "effect"].contains(&parts[1]) {
+        if parts.len() == 2 && ["status", "fractal", "blur"].contains(&parts[1]) {
             let expected = if parts[1] == "status" { "GET" } else { "POST" };
             if method != expected {
                 return Ok(response(
@@ -178,12 +228,28 @@ fn serve(mut stream: TcpStream, ui: bool, config: &Config) -> Result<(), Error> 
                 .ok()
                 .and_then(|i| config.targets.get(i))
                 .ok_or_else(|| "unknown target".into())
-                .and_then(|t| remote(t, &method, parts[1]));
+                .and_then(|t| remote(t, &method, parts[1], &form_args(&payload)?));
             let body = match result {
-                Ok(value) => format!(
-                    "<pre>{}</pre>",
-                    escape(&serde_json::to_string_pretty(&value)?)
-                ),
+                Ok(value) => {
+                    if let Some(image) = value["image"].as_str() {
+                        format!("<figure><img src=\"{}\" alt=\"GPU rendered result\"><figcaption>{} · {} × {} · {:.1} ms on backend (includes allocation, first-use compilation and readback)</figcaption></figure>",escape(image),escape(value["detail"].as_str().unwrap_or("")),value["width"],value["height"],value["elapsed_ms"].as_f64().unwrap_or(0.0))
+                    } else {
+                        format!(
+                            "<span class=\"device\">{} · {}</span>",
+                            escape(value["backend"].as_str().unwrap_or("GPU")),
+                            escape(
+                                &value["devices"]
+                                    .as_array()
+                                    .map(|d| d
+                                        .iter()
+                                        .filter_map(|v| v.as_str())
+                                        .collect::<Vec<_>>()
+                                        .join(", "))
+                                    .unwrap_or_else(|| "No device".into())
+                            )
+                        )
+                    }
+                }
                 Err(e) => format!(
                     "<p role=\"alert\">Backend unavailable: {}</p>",
                     escape(&e.to_string())
@@ -198,7 +264,7 @@ fn serve(mut stream: TcpStream, ui: bool, config: &Config) -> Result<(), Error> 
         }
     }
     #[cfg(feature = "backend")]
-    if !ui && ["/api/status", "/api/vector", "/api/effect"].contains(&path) {
+    if !ui && ["/api/status", "/api/fractal", "/api/blur"].contains(&path) {
         let expected = if path == "/api/status" { "GET" } else { "POST" };
         if method != expected {
             return Ok(response(
@@ -208,7 +274,17 @@ fn serve(mut stream: TcpStream, ui: bool, config: &Config) -> Result<(), Error> 
                 "{\"error\":\"method not allowed\"}",
             )?);
         }
-        let (status, value) = match operation(path) {
+        let (status, value) = match serde_json::from_slice::<Value>(&payload)
+            .or_else(|e| {
+                if payload.is_empty() {
+                    Ok(json!({}))
+                } else {
+                    Err(e)
+                }
+            })
+            .map_err(Error::from)
+            .and_then(|args| gpu::run(path, &args))
+        {
             Ok(value) => ("200 OK", value),
             Err(e) => ("503 Service Unavailable", json!({"error": e.to_string()})),
         };
