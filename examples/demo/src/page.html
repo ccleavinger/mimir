@@ -7,6 +7,7 @@
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;800&family=Source+Sans+3:wght@400;600&display=swap');
 [hidden]{display:none!important}:root{color-scheme:light;font:17px 'Source Sans 3',system-ui,sans-serif;background:#eee7d9;color:#302d26}*{box-sizing:border-box}body{max-width:1200px;margin:3rem auto;padding:0 1.4rem;background:radial-gradient(ellipse at top,#fffdf6a0,transparent 70%)}header{display:flex;align-items:center;justify-content:space-between;gap:2rem;flex-wrap:wrap;border-top:3px double #8b7857;padding:2rem 0 1rem}h1,h2,nav button{font-family:'Cinzel','Palatino Linotype',Palatino,Georgia,serif}h1{font-size:3.8rem;letter-spacing:.16em;margin:0;line-height:1.1}h2{font-size:1.8rem;margin:0 0 .8rem;font-weight:600}.runes{letter-spacing:.5em;color:#87734d;font-size:1rem}.eyebrow{text-transform:uppercase;letter-spacing:.2em;font-size:.75rem;font-weight:600;color:#806e4d}p{line-height:1.6;color:#716958;margin:.6rem 0 1.2rem}nav{display:flex;gap:.35rem;flex-wrap:wrap;margin:1.8rem 0 0;border-bottom:1px solid #a8987a}button,select,input{font:inherit}button,select{padding:.7rem 1rem;border:1px solid #aa997b;border-radius:2px;background:#f8f3e8;color:#433c2f;cursor:pointer}button:hover{background:#e7dbc3}button.primary{background:#485a4b;border-color:#485a4b;color:#fffdf5}button.primary:hover{background:#344637}nav button{border-bottom:0;font-size:.82rem;letter-spacing:.04em}nav button[aria-selected=true]{background:#faf7ef;border-top:3px solid #8b6f3e;padding-top:calc(.7rem - 2px);color:#3c4f3e}article{background:#faf7ef;border:1px solid #c9bda5;border-top:0;padding:2rem;min-height:460px;box-shadow:0 10px 25px #54482c0a}article[hidden]{display:none}canvas{background:white;touch-action:none;border:1px solid #c9bda5;max-width:100%;height:auto}button:disabled,input:disabled{opacity:.45;cursor:default}.status{font-size:.85rem;border-top:1px solid #d3c6ad;padding-top:.8rem;color:#59634b}label{display:block;margin-bottom:.5rem;font-weight:600}.controls{display:flex;align-items:center;gap:1rem;flex-wrap:wrap;margin:1.2rem 0}.controls label{margin:0}input[type=range]{accent-color:#59694e;width:180px}.gallery{display:grid;grid-template-columns:1fr 1fr;gap:1.5rem}figure{margin:1.5rem 0 0}figure img{display:block;width:100%;height:auto;background:#eee7d9;border:1px solid #c9bda5}figcaption{font-size:.85rem;color:#776d5b;line-height:1.5;margin-top:.7rem}.gallery figure{margin:0}.gallery canvas{display:block;width:100%}.htmx-indicator{display:none}.htmx-request .htmx-indicator,.htmx-request.htmx-indicator{display:inline;color:#806e4d}button.htmx-request{opacity:.6}footer{text-align:center;margin:2rem;color:#8b7857;font-family:Georgia,serif;font-style:italic}[role=alert]{color:#963c29}#fractal-result figure{max-width:960px}output{font-variant-numeric:tabular-nums}@media(max-width:700px){body{margin:1rem auto}h1{font-size:2.8rem}article{padding:1.2rem}.gallery{grid-template-columns:1fr}nav button{flex:1;padding:.7rem .4rem}}
+.mnist-layout{display:grid;grid-template-columns:300px 1fr;gap:2rem}.prediction{display:flex;gap:2rem;align-items:flex-start}.digit{font-family:'Cinzel',Georgia,serif;font-size:5rem;line-height:1.2;color:#485a4b}.digit-preview{width:84px;height:84px;image-rendering:pixelated;border:1px solid #c9bda5}.scores{flex:1;min-width:160px}.score{display:flex;align-items:center;gap:.7rem;font-variant-numeric:tabular-nums;font-size:.85rem;margin:.4rem 0}.score meter{width:100%;height:1rem;accent-color:#485a4b}.score span:last-child{min-width:3.5em;text-align:right}@media(max-width:850px){.mnist-layout{grid-template-columns:1fr}.prediction{max-width:500px}}
 </style>
 </head>
 <body>
@@ -18,7 +19,7 @@
 <button id="tab-fractal" role="tab" aria-selected="true" aria-controls="fractal" tabindex="0">Fractal forge</button>
 <button id="tab-effect" role="tab" aria-selected="false" aria-controls="effect" tabindex="-1">Photo blur</button>
 </nav>
-<article id="mnist" role="tabpanel" aria-labelledby="tab-mnist" hidden><h2>Draw a digit</h2><p>Draw a number from 0–9. Prediction is awaiting integration with the MNIST example.</p><canvas id="draw" width="280" height="280" aria-label="Digit drawing area"></canvas><p><button id="clear">Clear</button><button disabled>Predict</button></p></article>
+<article id="mnist" role="tabpanel" aria-labelledby="tab-mnist" hidden><div class="eyebrow">Reading the marks</div><h2>Draw a digit</h2><p>Draw a single number from 0–9. Your drawing is fitted to 28 × 28 pixels and sent to the selected GPU.</p><div class="mnist-layout"><form id="mnist-form" hx-post="/run/0/mnist" hx-target="#mnist-result" hx-disabled-elt="find button[type=submit]" hx-indicator="#mnist-busy"><canvas id="draw" width="280" height="280" aria-label="Digit drawing area"></canvas><div class="controls"><button id="clear" type="button">Clear</button><button type="submit" class="primary">Predict digit</button><span id="mnist-busy" class="htmx-indicator" role="status">Reading…</span></div></form><div id="mnist-result" aria-live="polite"><p>Draw a digit, then predict.</p></div></div></article>
 <article id="teach" role="tabpanel" aria-labelledby="tab-teach" hidden><h2>Teach image classes</h2><p>Image collection and GPU training are awaiting integration.</p><input type="file" accept="image/*" multiple disabled aria-label="Training images"><button disabled>Train classes</button></article>
 <article id="fractal" role="tabpanel" aria-labelledby="tab-fractal"><div class="eyebrow">Parallel worlds</div><h2>The fractal forge</h2><p>Explore the edge of the Mandelbrot set. Each of the 691,200 pixels traces its own orbit on the selected GPU, up to 512 iterations deep.</p>
 <form hx-post="/run/0/fractal" hx-target="#fractal-result" hx-disabled-elt="find button" hx-indicator="#fractal-busy">
@@ -39,6 +40,11 @@ document.body.addEventListener('htmx:responseError',e=>{const p=document.createE
 let photoPixels=null;
 document.body.addEventListener('htmx:configRequest',e=>{
  if(e.detail.path.startsWith('/run/'))e.detail.path=e.detail.path.replace(/^\/run\/\d+\//,'/run/'+target.value+'/');
+ if(e.detail.path.endsWith('/mnist')){
+   const pixels=digitPixels();
+   if(!pixels){e.preventDefault();const p=document.createElement('p');p.textContent='Draw a digit before predicting.';document.getElementById('mnist-result').replaceChildren(p);return;}
+   e.detail.parameters.pixels=JSON.stringify(pixels);
+ }
  if(e.detail.path.endsWith('/blur')){
    if(!photoPixels){e.preventDefault();return;}
    e.detail.parameters.width=original.width;e.detail.parameters.height=original.height;e.detail.parameters.pixels=JSON.stringify(photoPixels);
@@ -60,11 +66,27 @@ photo.onchange=async()=>{
    document.getElementById('photo-note').textContent='Photo ready. Choose a radius and blur on the selected GPU.';
  }catch(err){if(version===photoVersion)document.getElementById('photo-note').textContent='Could not read this image. Try a JPEG, PNG or WebP photo.';}finally{URL.revokeObjectURL(url);}
 };
-target.onchange=()=>{document.getElementById('fractal-result').replaceChildren();document.getElementById('blur-result').replaceChildren();htmx.ajax('GET','/run/'+target.value+'/status',{target:'#status'});};
+target.onchange=()=>{document.getElementById('mnist-result').replaceChildren();document.getElementById('fractal-result').replaceChildren();document.getElementById('blur-result').replaceChildren();htmx.ajax('GET','/run/'+target.value+'/status',{target:'#status'});};
 const c=document.getElementById('draw'),ctx=c.getContext('2d');ctx.lineWidth=20;ctx.lineCap='round';let down=false;
 function point(e){const r=c.getBoundingClientRect();return [(e.clientX-r.left)*c.width/r.width,(e.clientY-r.top)*c.height/r.height];}
-c.onpointerdown=e=>{down=true;c.setPointerCapture(e.pointerId);const [x,y]=point(e);ctx.beginPath();ctx.moveTo(x,y);ctx.lineTo(x+.01,y);ctx.stroke();};
+c.onpointerdown=e=>{document.getElementById('mnist-result').replaceChildren();down=true;c.setPointerCapture(e.pointerId);const [x,y]=point(e);ctx.beginPath();ctx.moveTo(x,y);ctx.lineTo(x+.01,y);ctx.stroke();};
 c.onpointermove=e=>{if(down){ctx.lineTo(...point(e));ctx.stroke();}};
 c.onpointerup=c.onpointercancel=c.onlostpointercapture=()=>down=false;
-document.getElementById('clear').onclick=()=>ctx.clearRect(0,0,c.width,c.height);
+document.getElementById('clear').onclick=()=>{ctx.clearRect(0,0,c.width,c.height);document.getElementById('mnist-result').replaceChildren();};
+function digitPixels(){
+ // MNIST has light ink on black, fitted inside 20×20 and centered by ink mass.
+ const rgba=ctx.getImageData(0,0,280,280).data;
+ let left=280,top=280,right=-1,bottom=-1;
+ for(let y=0;y<280;y++)for(let x=0;x<280;x++)if(rgba[(y*280+x)*4+3]>8){left=Math.min(left,x);right=Math.max(right,x);top=Math.min(top,y);bottom=Math.max(bottom,y);}
+ if(right<left)return null;
+ const crop=document.createElement('canvas');crop.width=28;crop.height=28;
+ const small=crop.getContext('2d'),w=right-left+1,h=bottom-top+1,scale=20/Math.max(w,h),dw=w*scale,dh=h*scale;
+ small.drawImage(c,left,top,w,h,(28-dw)/2,(28-dh)/2,dw,dh);
+ const alpha=small.getImageData(0,0,28,28).data;let total=0,mx=0,my=0;
+ for(let y=0;y<28;y++)for(let x=0;x<28;x++){const v=alpha[(y*28+x)*4+3];total+=v;mx+=x*v;my+=y*v;}
+ if(!total)return null;
+ const dx=Math.round(13.5-mx/total),dy=Math.round(13.5-my/total),pixels=Array(784).fill(0);
+ for(let y=0;y<28;y++)for(let x=0;x<28;x++){const nx=x+dx,ny=y+dy;if(nx>=0&&nx<28&&ny>=0&&ny<28)pixels[ny*28+nx]=alpha[(y*28+x)*4+3];}
+ return pixels;
+}
 </script></body></html>

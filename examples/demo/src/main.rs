@@ -1,5 +1,7 @@
 #[cfg(feature = "backend")]
 mod gpu;
+#[cfg(feature = "backend")]
+mod mnist;
 use serde_json::{json, Value};
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream, ToSocketAddrs};
@@ -213,7 +215,7 @@ fn serve(mut stream: TcpStream, ui: bool, config: &Config) -> Result<(), Error> 
     }
     if ui && path.starts_with("/run/") {
         let parts: Vec<_> = path.trim_start_matches("/run/").split('/').collect();
-        if parts.len() == 2 && ["status", "fractal", "blur"].contains(&parts[1]) {
+        if parts.len() == 2 && ["status", "fractal", "blur", "mnist"].contains(&parts[1]) {
             let expected = if parts[1] == "status" { "GET" } else { "POST" };
             if method != expected {
                 return Ok(response(
@@ -231,7 +233,16 @@ fn serve(mut stream: TcpStream, ui: bool, config: &Config) -> Result<(), Error> 
                 .and_then(|t| remote(t, &method, parts[1], &form_args(&payload)?));
             let body = match result {
                 Ok(value) => {
-                    if let Some(image) = value["image"].as_str() {
+                    if let Some(prediction) = value["prediction"].as_u64() {
+                        let scores = value["probabilities"]
+                            .as_array()
+                            .ok_or("missing probabilities")?;
+                        let bars = scores.iter().enumerate().map(|(digit, score)| {
+                            let pct = score.as_f64().unwrap_or(0.0)*100.0;
+                            format!("<div class=\"score\"><span>{digit}</span><meter min=\"0\" max=\"100\" value=\"{pct:.2}\">{pct:.1}%</meter><span>{pct:.1}%</span></div>")
+                        }).collect::<String>();
+                        format!("<div class=\"prediction\"><div><span class=\"eyebrow\">Prediction</span><div class=\"digit\">{prediction}</div><p>{:.1} ms on backend</p><img class=\"digit-preview\" src=\"{}\" alt=\"28 by 28 input seen by the model\"><p>What the model sees</p></div><div class=\"scores\">{bars}</div></div>",value["elapsed_ms"].as_f64().unwrap_or(0.0),escape(value["image"].as_str().unwrap_or("")))
+                    } else if let Some(image) = value["image"].as_str() {
                         format!("<figure><img src=\"{}\" alt=\"GPU rendered result\"><figcaption>{} · {} × {} · {:.1} ms on backend (includes allocation, first-use compilation and readback)</figcaption></figure>",escape(image),escape(value["detail"].as_str().unwrap_or("")),value["width"],value["height"],value["elapsed_ms"].as_f64().unwrap_or(0.0))
                     } else {
                         format!(
@@ -251,7 +262,7 @@ fn serve(mut stream: TcpStream, ui: bool, config: &Config) -> Result<(), Error> 
                     }
                 }
                 Err(e) => format!(
-                    "<p role=\"alert\">Backend unavailable: {}</p>",
+                    "<p role=\"alert\">Request failed: {}</p>",
                     escape(&e.to_string())
                 ),
             };
@@ -264,7 +275,7 @@ fn serve(mut stream: TcpStream, ui: bool, config: &Config) -> Result<(), Error> 
         }
     }
     #[cfg(feature = "backend")]
-    if !ui && ["/api/status", "/api/fractal", "/api/blur"].contains(&path) {
+    if !ui && ["/api/status", "/api/fractal", "/api/blur", "/api/mnist"].contains(&path) {
         let expected = if path == "/api/status" { "GET" } else { "POST" };
         if method != expected {
             return Ok(response(
@@ -323,6 +334,8 @@ fn main() -> Result<(), Error> {
     if !cfg!(any(feature = "ui", feature = "backend")) {
         return Err("enable ui or backend".into());
     }
+    #[cfg(feature = "backend")]
+    mnist::init()?;
     // Environment overrides optional compile-time defaults, so one binary can be reused.
     let api_addr = setting(
         "MIMIR_DEMO_API_ADDR",

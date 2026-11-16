@@ -59,12 +59,15 @@ fn blur(input: &[f32], out: &mut [f32], width: i32, height: i32, radius: i32, ho
 }
 
 pub fn run(path: &str, args: &Value) -> Result<Value, Error> {
+    if path == "/api/mnist" {
+        return super::mnist::predict(args);
+    }
     if path == "/api/status" {
         let devices = mimir::default_runtime()?.devices()?;
         return Ok(
             json!({"devices": devices.iter().map(|d| d.name()).collect::<Vec<_>>(),
             "backend": if cfg!(feature="cuda") { "CUDA" } else if cfg!(feature="vulkan") { "Vulkan" } else { "none" },
-            "demos": ["fractal", "blur"]}),
+            "demos": ["fractal", "blur", "mnist"]}),
         );
     }
     let start = Instant::now();

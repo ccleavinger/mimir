@@ -2,7 +2,7 @@
 
 The HTMX interface uses parchment colors, serif titles and four demo tabs.
 Fractal forge and photo blur produce actual images on the selected GPU.
-MNIST prediction and image training remain placeholders.
+MNIST drawing runs dense-network inference on the selected GPU. Image training remains a placeholder.
 
 ```sh
 # Laptop: website on :8080, Vulkan API on :8081
@@ -50,3 +50,26 @@ readback, and exclude encoding and network transfer. They are demo timings.
 The UI renders image responses as HTML fragments rather than printing JSON.
 Requests use Content-Length framing with a 16 MiB body limit. Validation/GPU
 errors return JSON with status 503. This is a trusted-network demo without auth.
+
+## MNIST inference
+
+Place the version 1 model from `mnist-cnn` at
+`examples/demo/assets/mnist-model.json` on each backend machine before starting.
+The backend loads it once, checks the 784 → 256 → 10 architecture, parameter
+counts and finite values, and uploads weights before opening any listening ports.
+A missing or invalid model terminates startup with its full path and reason.
+The asset path is relative to the example source directory at build time,
+independent of the launch working directory. UI-only builds do not need a model.
+
+Draw one digit and press **Predict digit**. The browser fits the drawing within
+20×20 pixels, centers its ink mass in a 28×28 frame, and converts it to light ink
+on black. The result shows the predicted digit, softmax scores for all ten
+classes, and a preview of exactly what the model received. Dense layers and
+ReLU run on the selected GPU; the ten output logits are normalized on the host.
+
+`POST /api/mnist` accepts JSON `{ "pixels": [...] }` with exactly 784 grayscale
+byte values in row-major order (0 background, 255 ink). Values are normalized to
+0–1 for inference. The response contains `prediction`, `probabilities`,
+`elapsed_ms`, and an `image` data URL for the 28×28 input. Empty drawings and
+malformed inputs return an error. Timings include input upload, first-use
+compilation, dense inference and output readback.
